@@ -1,0 +1,18 @@
+FROM python:3.12-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache tzdata
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY app /app/app
+COPY dashboard /app/dashboard
+
+ENV APP_CONFIG=/app/config/config.yml
+ENV PORT=8120
+
+EXPOSE 8120
+
+CMD ["python", "-m", "dashboard.server"]

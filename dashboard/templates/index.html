@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="refresh" content="300" />
+    <title>{{ data.clan.name or "Clan" }} · Liquid Command Center</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="liquid-bg blob-a"></div>
+    <div class="liquid-bg blob-b"></div>
+    <div class="liquid-bg blob-c"></div>
+
+    <main class="shell">
+      <header class="topbar panel" style="--i:1">
+        <div>
+          <p class="eyebrow">Liquid Clan Intelligence</p>
+          <h1>{{ data.clan.name or "Clan" }} <span>{{ data.clan_tag }}</span></h1>
+          <p class="subtitle">
+            Niveau {{ data.clan.clan_level | intfmt }} · {{ data.kpis.active_members | intfmt }} membres ·
+            données {{ data.scale_label }}
+          </p>
+        </div>
+        <nav class="scale-nav">
+          {% for opt in data.scales %}
+          <a
+            class="scale-chip {{ 'active' if opt.key == data.scale_key else '' }}"
+            href="{{ url_for('dashboard', scale=opt.key) }}"
+          >
+            {{ opt.label }}
+          </a>
+          {% endfor %}
+        </nav>
+      </header>
+
+      <section class="panel health span-4" style="--i:2">
+        <div class="liquid-meter" style="--score: {{ data.health.score }}">
+          <div class="liquid-meter-core">
+            <strong>{{ data.health.score | intfmt }}</strong>
+            <small>/100</small>
+          </div>
+        </div>
+        <div class="health-copy">
+          <p class="eyebrow">Santé Globale</p>
+          <h2>Grade {{ data.health.grade }}</h2>
+          <p>
+            Discipline guerre, exécution capitale, solidarité dons et fraîcheur DB.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel kpis span-8" style="--i:3">
+        <article>
+          <p>Membres actifs</p>
+          <strong>{{ data.kpis.active_members | intfmt }}</strong>
+          <small>{{ data.kpis.members_delta | intfmt }} variation</small>
+        </article>
+        <article>
+          <p>Points clan</p>
+          <strong>{{ data.clan.clan_points | intfmt }}</strong>
+          <small>{{ data.kpis.clan_points_delta | intfmt }} sur période</small>
+        </article>
+        <article>
+          <p>Dons envoyés</p>
+          <strong>{{ data.kpis.donations_sent | intfmt }}</strong>
+          <small>reçus {{ data.kpis.donations_received | intfmt }}</small>
+        </article>
+        <article>
+          <p>Clan Games moyen</p>
+          <strong>{{ data.kpis.avg_clan_games | intfmt }}</strong>
+          <small>cumul moyen membre</small>
+        </article>
+        <article>
+          <p>Contrib. capitale</p>
+          <strong>{{ data.kpis.capital_contributions | intfmt }}</strong>
+          <small>cumul joueurs actifs</small>
+        </article>
+        <article>
+          <p>Win rate guerre</p>
+          <strong>{{ data.war_summary.win_rate | pctfmt }}</strong>
+          <small>{{ data.war_summary.wins | intfmt }}W / {{ data.war_summary.losses | intfmt }}L</small>
+        </article>
+      </section>
+
+      <section class="panel chart span-8" style="--i:4">
+        <div class="panel-head">
+          <h3>Evolution points de clan</h3>
+          <span>base DB: `clan_snapshots`</span>
+        </div>
+        <canvas id="chart-clan-points"></canvas>
+      </section>
+
+      <section class="panel chart span-4" style="--i:5">
+        <div class="panel-head">
+          <h3>Composantes Santé</h3>
+          <span>score pondéré</span>
+        </div>
+        <canvas id="chart-health"></canvas>
+      </section>
+
+      <section class="panel chart span-6" style="--i:6">
+        <div class="panel-head">
+          <h3>Résultats Guerres</h3>
+          <span>base DB: `clan_wars`</span>
+        </div>
+        <canvas id="chart-wars"></canvas>
+      </section>
+
+      <section class="panel span-6" style="--i:7">
+        <div class="panel-head">
+          <h3>Signal Risque Joueurs</h3>
+          <span>attaques manquées + score</span>
+        </div>
+        <ul class="liquid-list compact">
+          {% for row in data.at_risk %}
+          <li>
+            <div>
+              <strong>{{ row.name }}</strong>
+              <small>{{ row.player_tag }} · TH{{ row.town_hall_level | intfmt }}</small>
+            </div>
+            <div class="right">
+              <small class="danger">{{ row.missed_attacks | intfmt }} manquées</small>
+              <span>{{ row.health_score | intfmt }}/100</span>
+            </div>
+          </li>
+          {% endfor %}
+          {% if not data.at_risk %}
+          <li><small>Aucune donnée.</small></li>
+          {% endif %}
+        </ul>
+      </section>
+
+      <section class="panel span-6" style="--i:8">
+        <div class="panel-head">
+          <h3>Top Contributeurs</h3>
+          <span>dons + capitale + étoiles</span>
+        </div>
+        <ul class="liquid-list compact">
+          {% for row in data.top_contributors %}
+          <li>
+            <div>
+              <strong>{{ row.name }}</strong>
+              <small>{{ row.player_tag }}</small>
+            </div>
+            <div class="right">
+              <small>{{ row.donations | intfmt }} dons</small>
+              <span>{{ row.attack_stars | intfmt }} ★</span>
+            </div>
+          </li>
+          {% endfor %}
+          {% if not data.top_contributors %}
+          <li><small>Aucune donnée.</small></li>
+          {% endif %}
+        </ul>
+      </section>
+
+      <section class="panel span-6" style="--i:9">
+        <div class="panel-head">
+          <h3>Dernier Weekend Capitale</h3>
+          <span>{{ data.latest_capital.season_start_time | dtfmt if data.latest_capital else 'n/a' }}</span>
+        </div>
+        {% if data.latest_capital %}
+        <div class="mini-kpis">
+          <div><p>Loot total</p><strong>{{ data.latest_capital.capital_total_loot | intfmt }}</strong></div>
+          <div><p>Attaques</p><strong>{{ data.latest_capital.total_attacks | intfmt }}</strong></div>
+          <div><p>Districts</p><strong>{{ data.latest_capital.enemy_districts_destroyed | intfmt }}</strong></div>
+        </div>
+        {% endif %}
+        <ul class="liquid-list">
+          {% for row in data.capital_top %}
+          <li>
+            <div>
+              <strong>{{ row.player_name }}</strong>
+              <small>{{ row.player_tag }}</small>
+            </div>
+            <div class="right">
+              <small>{{ row.attacks | intfmt }}/{{ (row.attack_limit + row.bonus_attack_limit) | intfmt }} attaques</small>
+              <span>{{ row.capital_resources_looted | intfmt }} loot</span>
+            </div>
+          </li>
+          {% endfor %}
+          {% if not data.capital_top %}
+          <li><small>Pas encore de stats capitale.</small></li>
+          {% endif %}
+        </ul>
+      </section>
+
+      <section class="panel span-6" style="--i:10">
+        <div class="panel-head">
+          <h3>Fraîcheur des Données</h3>
+          <span>preuve que tout vient de la DB</span>
+        </div>
+        <div class="fresh-grid">
+          <article><p>Snapshots clan</p><strong>{{ data.freshness.latest_snapshot | dtfmt }}</strong></article>
+          <article><p>Wars</p><strong>{{ data.freshness.latest_war | dtfmt }}</strong></article>
+          <article><p>Capitale</p><strong>{{ data.freshness.latest_capital | dtfmt }}</strong></article>
+          <article><p>Players</p><strong>{{ data.freshness.latest_players | dtfmt }}</strong></article>
+        </div>
+      </section>
+
+      <section class="panel span-12" style="--i:11">
+        <div class="panel-head">
+          <h3>Détail Participation Joueurs</h3>
+          <span>clique un joueur pour drill-down multi-échelle</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Joueur</th>
+                <th>TH</th>
+                <th>Ligue</th>
+                <th>Dons</th>
+                <th>Guerres</th>
+                <th>Manquées</th>
+                <th>Fiabilité</th>
+                <th>Santé</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in data.players %}
+              <tr>
+                <td>
+                  <a class="player-link" href="{{ url_for('player_detail', player_tag=row.player_slug, scale=data.scale_key) }}">
+                    {{ row.name }}
+                  </a>
+                  <small>{{ row.player_tag }}</small>
+                </td>
+                <td>{{ row.town_hall_level | intfmt }}</td>
+                <td>{{ row.league_tier_name or '-' }}</td>
+                <td>{{ row.donations | intfmt }}</td>
+                <td>{{ row.attacks_used | intfmt }}/{{ row.attack_capacity | intfmt }}</td>
+                <td class="{{ 'danger' if row.missed_attacks > 0 else '' }}">{{ row.missed_attacks | intfmt }}</td>
+                <td>{{ row.participation_rate | pctfmt }}</td>
+                <td><span class="score-chip">{{ row.health_score | intfmt }}/100</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <script>
+      window.DASH_DATA = {{ chart_data | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+  </body>
+</html>

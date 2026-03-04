@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="refresh" content="300" />
+    <title>{{ data.player.name }} · Détail Joueur</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="liquid-bg blob-a"></div>
+    <div class="liquid-bg blob-b"></div>
+
+    <main class="shell">
+      <header class="topbar panel" style="--i:1">
+        <div>
+          <p class="eyebrow">Drill-Down Joueur (DB only)</p>
+          <h1>{{ data.player.name }} <span>{{ data.player.tag }}</span></h1>
+          <p class="subtitle">
+            Clan {{ data.clan_tag }} · TH{{ data.player.town_hall_level | intfmt }} ·
+            données {{ data.scale_label }}
+          </p>
+        </div>
+        <div class="topbar-actions">
+          <a class="back-link" href="{{ url_for('dashboard', scale=data.scale_key) }}">Retour dashboard</a>
+          <nav class="scale-nav">
+            {% for opt in data.scales %}
+            <a
+              class="scale-chip {{ 'active' if opt.key == data.scale_key else '' }}"
+              href="{{ url_for('player_detail', player_tag=data.player.tag.lstrip('#'), scale=opt.key) }}"
+            >
+              {{ opt.label }}
+            </a>
+            {% endfor %}
+          </nav>
+        </div>
+      </header>
+
+      <section class="panel health span-4" style="--i:2">
+        <div class="liquid-meter" style="--score: {{ data.player_health }}">
+          <div class="liquid-meter-core">
+            <strong>{{ data.player_health | intfmt }}</strong>
+            <small>/100</small>
+          </div>
+        </div>
+        <div class="health-copy">
+          <p class="eyebrow">Score Joueur</p>
+          <h2>Fiabilité</h2>
+          <p>
+            Combinaison participation guerre, dons, capitale et fraîcheur.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel kpis span-8" style="--i:3">
+        <article>
+          <p>Trophées</p>
+          <strong>{{ data.player.trophies | intfmt }}</strong>
+          <small>best {{ data.player.best_trophies | intfmt }}</small>
+        </article>
+        <article>
+          <p>Dons</p>
+          <strong>{{ data.player.donations | intfmt }}</strong>
+          <small>reçus {{ data.player.donations_received | intfmt }}</small>
+        </article>
+        <article>
+          <p>Clan Games cumulé</p>
+          <strong>{{ data.player.clan_games_points_total | intfmt }}</strong>
+          <small>achievement total</small>
+        </article>
+        <article>
+          <p>Capitale cumulé</p>
+          <strong>{{ data.player.clan_capital_contributions | intfmt }}</strong>
+          <small>ressources données</small>
+        </article>
+        <article>
+          <p>Guerre attaques</p>
+          <strong>{{ data.war_summary.attacks_used | intfmt }}/{{ data.war_summary.attack_capacity | intfmt }}</strong>
+          <small class="{{ 'danger' if data.war_summary.missed_attacks > 0 else '' }}">{{ data.war_summary.missed_attacks | intfmt }} manquées</small>
+        </article>
+        <article>
+          <p>Dernière synchro</p>
+          <strong>{{ data.player.updated_at | dtfmt }}</strong>
+          <small>{{ data.freshness_hours | intfmt }} h</small>
+        </article>
+      </section>
+
+      <section class="panel chart span-6" style="--i:4">
+        <div class="panel-head">
+          <h3>Trophées (timeline)</h3>
+          <span>player_snapshots</span>
+        </div>
+        <canvas id="chart-player-trophies"></canvas>
+      </section>
+
+      <section class="panel chart span-6" style="--i:5">
+        <div class="panel-head">
+          <h3>Progression (delta)</h3>
+          <span>dons / clan games / capitale</span>
+        </div>
+        <canvas id="chart-player-deltas"></canvas>
+      </section>
+
+      <section class="panel chart span-6" style="--i:6">
+        <div class="panel-head">
+          <h3>Participation Guerre</h3>
+          <span>attaques utilisées vs manquées</span>
+        </div>
+        <canvas id="chart-player-wars"></canvas>
+      </section>
+
+      <section class="panel chart span-6" style="--i:7">
+        <div class="panel-head">
+          <h3>Performance Capitale</h3>
+          <span>loot et attaques par weekend</span>
+        </div>
+        <canvas id="chart-player-capital"></canvas>
+      </section>
+
+      <section class="panel span-6" style="--i:8">
+        <div class="panel-head">
+          <h3>Historique Guerres</h3>
+          <span>{{ data.scale_label }}</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Adversaire</th>
+                <th>Att.</th>
+                <th>Manq.</th>
+                <th>Etoiles</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in data.war_history %}
+              <tr>
+                <td>{{ row.start_time | dtfmt }}</td>
+                <td>{{ row.war_type }}</td>
+                <td>{{ row.opponent_name or '-' }}</td>
+                <td>{{ row.attacks_used | intfmt }}/{{ row.attack_capacity | intfmt }}</td>
+                <td class="{{ 'danger' if row.missed_attacks > 0 else '' }}">{{ row.missed_attacks | intfmt }}</td>
+                <td>{{ row.total_attack_stars | intfmt }}</td>
+              </tr>
+              {% endfor %}
+              {% if not data.war_history %}
+              <tr><td colspan="6">Aucune donnée guerre.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel span-6" style="--i:9">
+        <div class="panel-head">
+          <h3>Historique Capitale</h3>
+          <span>par weekend</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Saison</th>
+                <th>Attaques</th>
+                <th>Capacité</th>
+                <th>Loot</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in data.capital_history %}
+              <tr>
+                <td>{{ row.season_start_time | dtfmt }}</td>
+                <td>{{ row.attacks | intfmt }}</td>
+                <td>{{ (row.attack_limit + row.bonus_attack_limit) | intfmt }}</td>
+                <td>{{ row.capital_resources_looted | intfmt }}</td>
+              </tr>
+              {% endfor %}
+              {% if not data.capital_history %}
+              <tr><td colspan="4">Aucune donnée capitale.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <script>
+      window.DASH_DATA = {{ chart_data | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+  </body>
+</html>

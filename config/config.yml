@@ -1,0 +1,12 @@
+# Obligatoire (ex: "#2PVYQ00R")
+clan_id: ""
+
+# Format cron standard: minute heure jour-du-mois mois jour-semaine
+fetch_cron: "0 * * * *"
+
+# Par défaut: URL DB interne au réseau docker-compose
+# Exemple local hors Docker: postgresql://coc:coc@localhost:5432/coc
+db_url: "postgresql://coc:coc@db:5432/coc"
+
+api_base_url: "https://api.clashofclans.com/v1"
+request_timeout_seconds: 20
