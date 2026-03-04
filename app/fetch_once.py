@@ -115,7 +115,13 @@ def main() -> int:
                     war_type="regular",
                     clan_tag=clan_tag,
                 )
-                storage.upsert_war_members(conn, current_war_id, current_war, clan_tag=clan_tag)
+                storage.upsert_war_members(
+                    conn,
+                    current_war_id,
+                    current_war,
+                    clan_tag=clan_tag,
+                    war_type="regular",
+                )
                 storage.upsert_war_attacks(conn, current_war_id, current_war, clan_tag=clan_tag)
 
             if cwl_group:
@@ -131,7 +137,13 @@ def main() -> int:
                         league_group_season=season,
                         league_group_state=state,
                     )
-                    storage.upsert_war_members(conn, war_id, cwl_war, clan_tag=clan_tag)
+                    storage.upsert_war_members(
+                        conn,
+                        war_id,
+                        cwl_war,
+                        clan_tag=clan_tag,
+                        war_type="cwl",
+                    )
                     storage.upsert_war_attacks(conn, war_id, cwl_war, clan_tag=clan_tag)
                     cwl_wars_stored += 1
 

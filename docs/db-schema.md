@@ -71,6 +71,7 @@ Ce document décrit la structure de la base PostgreSQL utilisée par `cron` pour
 - PK: `(war_id, clan_tag, player_tag)`
 - Mesures joueur: `attacks_used`, `attack_capacity`, `missed_attacks`, `total_attack_stars`, `total_attack_destruction`
 - Règle métier: `missed_attacks` n'est compté que si la guerre est terminée (`warEnded`), sinon `0`.
+- Règle LDC: en guerre `war_type='cwl'`, la capacité d'attaque effective est `1`.
 
 ### `war_attacks`
 - PK: `(war_id, attacker_tag, defender_tag, attack_order)`
@@ -120,4 +121,5 @@ Ce document décrit la structure de la base PostgreSQL utilisée par `cron` pour
 - Participation GDC/LDC: `clan_wars.war_type` + `war_member_performances`.
 - Ligue joueur: `players.league_tier_name`.
 - Clan Games (cumulé): `players.clan_games_points_total`.
+- Clan Games (pilotage): delta mensuel calculé depuis `player_snapshots` (max mensuel puis différence mois N vs N-1).
 - Capitale: `capital_raid_seasons` + `capital_raid_member_stats` + cumul `players.clan_capital_contributions`.

@@ -49,9 +49,12 @@ docker compose logs -f dashboard
 ## Règles métier importantes
 
 - `missed_attacks` est compté **uniquement quand la guerre est terminée** (`warEnded`).
+- En **LDC (CWL)**, la capacité d'attaque est forcée à **1 attaque/joueur**.
 - Distinction explicite des guerres:
   - `war_type=regular` => **GDC**
   - `war_type=cwl` => **LDC**
+- `Clan Games` est analysé en **delta mensuel** (mois vs mois), pas en cumul brut.
+- `Raids Capitale` sont exploités par **weekend** (fenêtre vendredi -> lundi via saisons API).
 - Les stats multi-périodes viennent uniquement de la DB (snapshots + historiques), pas d'un calcul direct live API.
 
 ## Schéma DB
@@ -71,6 +74,7 @@ Schéma SQL source:
 - Capitale (saisons + détail joueur)
 
 Tout est historisé pour analyser plusieurs échelles de temps: `7d`, `30d`, `90d`, `365d`, `all`.
+Le tableau "Détail participation joueurs" est triable par colonne (joueur, TH, dons, global, miss GDC/LDC, score).
 
 ## Notes migration
 

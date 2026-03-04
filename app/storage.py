@@ -576,10 +576,20 @@ def upsert_war(
     return war_id
 
 
-def upsert_war_members(conn: psycopg.Connection, war_id: str, war: dict, clan_tag: str) -> None:
+def upsert_war_members(
+    conn: psycopg.Connection,
+    war_id: str,
+    war: dict,
+    clan_tag: str,
+    *,
+    war_type: str,
+) -> None:
     team_size = _safe_int(war.get("teamSize"), 0)
     attacks_per_member = _safe_int(war.get("attacksPerMember"), 2)
-    attack_capacity = attacks_per_member if attacks_per_member > 0 else 2
+    if war_type == "cwl":
+        attack_capacity = 1
+    else:
+        attack_capacity = attacks_per_member if attacks_per_member > 0 else 2
     war_ended = str(war.get("state") or "") == "warEnded"
 
     with conn.cursor() as cur:

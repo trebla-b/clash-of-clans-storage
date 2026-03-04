@@ -54,6 +54,45 @@ const WAR_FAMILY_LABEL = {
   ldc: "LDC",
 };
 
+const PLAYER_SORT_DEFAULT = {
+  key: "health_score",
+  direction: "desc",
+};
+
+const PLAYER_SORTS = {
+  name: { label: "Joueur", defaultDirection: "asc", value: (player) => String(player?.name || "").toLowerCase() },
+  town_hall: {
+    label: "TH",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.town_hall_level || 0),
+  },
+  donations: {
+    label: "Dons",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.donations || 0),
+  },
+  overall_participation: {
+    label: "Global %",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.overall?.participation_rate || 0),
+  },
+  gdc_missed: {
+    label: "GDC miss",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.gdc?.missed_attacks || 0),
+  },
+  ldc_missed: {
+    label: "LDC miss",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.ldc?.missed_attacks || 0),
+  },
+  health_score: {
+    label: "Score",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.health_score || 0),
+  },
+};
+
 function parseRoute() {
   const path = window.location.pathname.replace(/^\/+|\/+$/g, "");
   const parts = path.split("/").filter(Boolean);
@@ -172,18 +211,17 @@ function buildClanGamesChart(series) {
     labels: series.map((item) => item.label),
     datasets: [
       {
-        label: "Clan Games moyen",
-        data: series.map((item) => item.avg_clan_games),
-        borderColor: "#55e6a9",
-        backgroundColor: "rgba(85, 230, 169, 0.18)",
-        fill: true,
-        tension: 0.25,
+        label: "Delta mensuel Clan Games",
+        data: series.map((item) => item.monthly_delta),
+        backgroundColor: "rgba(85, 230, 169, 0.84)",
       },
       {
-        label: "Total Clan Games",
-        data: series.map((item) => item.total_clan_games),
+        label: "Total cumulé clan",
+        data: series.map((item) => item.clan_total),
         borderColor: "#ffc35b",
+        type: "line",
         yAxisID: "y1",
+        tension: 0.25,
       },
     ],
   };
@@ -215,14 +253,30 @@ function buildPlayerDeltaChart(series) {
         backgroundColor: "rgba(85, 230, 169, 0.84)",
       },
       {
-        label: "Clan Games",
-        data: series.map((item) => item.clan_games_delta),
-        backgroundColor: "rgba(255, 195, 91, 0.84)",
-      },
-      {
         label: "Capitale",
         data: series.map((item) => item.capital_delta),
         backgroundColor: "rgba(77, 215, 248, 0.84)",
+      },
+    ],
+  };
+}
+
+function buildPlayerClanGamesMonthlyChart(series) {
+  return {
+    labels: series.map((item) => item.label),
+    datasets: [
+      {
+        label: "Delta mensuel",
+        data: series.map((item) => item.monthly_delta),
+        backgroundColor: "rgba(85, 230, 169, 0.84)",
+      },
+      {
+        label: "Total cumulé joueur",
+        data: series.map((item) => item.month_total),
+        type: "line",
+        borderColor: "#ffc35b",
+        yAxisID: "y1",
+        tension: 0.25,
       },
     ],
   };
@@ -388,11 +442,41 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
   const health = data?.health || {};
   const charts = data?.charts || {};
   const players = data?.players || [];
+  const [playerSort, setPlayerSort] = useState(PLAYER_SORT_DEFAULT);
 
   const pointsChart = useMemo(() => buildClanPointsChart(charts.clan_points || []), [charts.clan_points]);
   const warChart = useMemo(() => buildWarOutcomesChart(charts.war_outcomes || {}), [charts.war_outcomes]);
   const healthChart = useMemo(() => buildHealthChart(charts.health_components || []), [charts.health_components]);
   const clanGamesChart = useMemo(() => buildClanGamesChart(charts.clan_games || []), [charts.clan_games]);
+  const sortedPlayers = useMemo(() => {
+    const conf = PLAYER_SORTS[playerSort.key] || PLAYER_SORTS.health_score;
+    const direction = playerSort.direction === "asc" ? 1 : -1;
+    const items = [...players];
+    items.sort((a, b) => {
+      const av = conf.value(a);
+      const bv = conf.value(b);
+      if (typeof av === "string" || typeof bv === "string") {
+        return String(av).localeCompare(String(bv), "fr") * direction;
+      }
+      return (Number(av || 0) - Number(bv || 0)) * direction;
+    });
+    return items;
+  }, [players, playerSort]);
+
+  const onSortPlayers = useCallback((key) => {
+    setPlayerSort((current) => {
+      if (current.key === key) {
+        return {
+          key,
+          direction: current.direction === "asc" ? "desc" : "asc",
+        };
+      }
+      return {
+        key,
+        direction: PLAYER_SORTS[key]?.defaultDirection || "desc",
+      };
+    });
+  }, []);
 
   return (
     <>
@@ -409,8 +493,16 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
         <Metric label="Santé globale" value={`${Number(health.score || 0).toFixed(1)} / 100`} hint={`Grade ${health.grade || "D"}`} />
         <Metric label="Points clan" value={fmtInt(clan.clan_points)} hint={`${fmtInt(kpis.clan_points_delta)} sur période`} />
         <Metric label="Dons envoyés" value={fmtInt(kpis.donations_sent)} hint={`reçus ${fmtInt(kpis.donations_received)}`} />
-        <Metric label="Clan Games moyen" value={fmtInt(kpis.avg_clan_games)} hint="cumulé depuis snapshots" />
-        <Metric label="Capitale (cumul)" value={fmtInt(kpis.capital_contributions)} hint="contributions actifs" />
+        <Metric
+          label="Clan Games Δ mois"
+          value={fmtInt(kpis.clan_games_current_month_delta)}
+          hint={`mois précédent ${fmtInt(kpis.clan_games_previous_month_delta)}`}
+        />
+        <Metric
+          label="Capitale (cumul)"
+          value={fmtInt(kpis.capital_contributions)}
+          hint="weekend raids (ven-lun)"
+        />
         <Metric label="Win rate global" value={fmtPct(wars?.overall?.win_rate)} hint={`${fmtInt(wars?.overall?.wins)}W / ${fmtInt(wars?.overall?.losses)}L`} />
       </View>
 
@@ -450,9 +542,9 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
             <Bar data={warChart} options={chartOptions({ stacked: true })} />
           </View>
         </Panel>
-        <Panel title="Clan Games (cumul snapshots)" subtitle="DB: player_snapshots">
+        <Panel title="Clan Games (delta mensuel)" subtitle="événement mensuel, comparaison mois par mois">
           <View style={styles.chartWrap}>
-            <Line data={clanGamesChart} options={chartOptions({ dualAxis: true })} />
+            <Bar data={clanGamesChart} options={chartOptions({ dualAxis: true })} />
           </View>
         </Panel>
       </View>
@@ -486,15 +578,24 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
         ) : (
           <View style={styles.tableWrap}>
             <View style={[styles.tableRow, styles.tableHeaderRow]}>
-              <Text style={[styles.tableCell, styles.cellName]}>Joueur</Text>
-              <Text style={styles.tableCell}>TH</Text>
-              <Text style={styles.tableCell}>Dons</Text>
-              <Text style={styles.tableCell}>Global</Text>
-              <Text style={styles.tableCell}>GDC</Text>
-              <Text style={styles.tableCell}>LDC</Text>
-              <Text style={styles.tableCell}>Score</Text>
+              {Object.entries(PLAYER_SORTS).map(([key, conf]) => {
+                const isActive = playerSort.key === key;
+                const arrow = isActive ? (playerSort.direction === "asc" ? " ▲" : " ▼") : "";
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => onSortPlayers(key)}
+                    style={[styles.headerSortCell, key === "name" ? styles.cellName : null]}
+                  >
+                    <Text style={[styles.tableCell, key === "name" ? styles.cellName : null]}>
+                      {conf.label}
+                      {arrow}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-            {players.map((player) => (
+            {sortedPlayers.map((player) => (
               <Pressable
                 key={player.player_tag}
                 onPress={() => onOpenPlayer(player.player_slug || player.player_tag)}
@@ -505,9 +606,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
                 </Text>
                 <Text style={styles.tableCell}>{fmtInt(player.town_hall_level)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.donations)}</Text>
-                <Text style={styles.tableCell}>
-                  {fmtInt(player.overall?.attacks_used)}/{fmtInt(player.overall?.attack_capacity)}
-                </Text>
+                <Text style={styles.tableCell}>{fmtPct(player.overall?.participation_rate)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.gdc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.ldc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.health_score)}</Text>
@@ -543,11 +642,16 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
   const snapshotSeries = charts?.snapshots || [];
   const warSeries = charts?.war_history?.[family] || [];
   const capitalSeries = charts?.capital_history || [];
+  const clanGamesMonthlySeries = charts?.clan_games_monthly || [];
 
   const snapshotChart = useMemo(() => buildPlayerSnapshotChart(snapshotSeries), [snapshotSeries]);
   const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries), [snapshotSeries]);
   const warChart = useMemo(() => buildPlayerWarChart(warSeries), [warSeries]);
   const capitalChart = useMemo(() => buildPlayerCapitalChart(capitalSeries), [capitalSeries]);
+  const clanGamesMonthlyChart = useMemo(
+    () => buildPlayerClanGamesMonthlyChart(clanGamesMonthlySeries),
+    [clanGamesMonthlySeries],
+  );
 
   return (
     <>
@@ -570,6 +674,11 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
         <Metric label="Trophées" value={fmtInt(player.trophies)} hint={`best ${fmtInt(player.best_trophies)}`} />
         <Metric label="Dons" value={fmtInt(player.donations)} hint={`reçus ${fmtInt(player.donations_received)}`} />
         <Metric label="Clan Games cumulé" value={fmtInt(player.clan_games_points_total)} />
+        <Metric
+          label="Clan Games Δ mois"
+          value={fmtInt(summary.clan_games_current_month_delta)}
+          hint={`mois précédent ${fmtInt(summary.clan_games_previous_month_delta)}`}
+        />
         <Metric label="Capitale cumulée" value={fmtInt(player.clan_capital_contributions)} />
       </View>
 
@@ -603,12 +712,18 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
             <Line data={snapshotChart} options={chartOptions()} />
           </View>
         </Panel>
-        <Panel title="Progression (delta)" subtitle="dons / clan games / capitale">
+        <Panel title="Progression (delta)" subtitle="dons + capitale (snapshots)">
           <View style={styles.chartWrap}>
             <Bar data={deltaChart} options={chartOptions({ stacked: true })} />
           </View>
         </Panel>
       </View>
+
+      <Panel title="Clan Games (delta mensuel)" subtitle="suivi mois par mois uniquement">
+        <View style={styles.chartWrap}>
+          <Bar data={clanGamesMonthlyChart} options={chartOptions({ dualAxis: true })} />
+        </View>
+      </Panel>
 
       <Panel title="Participation guerre" subtitle="attaques oubliées comptées seulement si guerre terminée">
         <View style={styles.scaleRow}>
@@ -630,7 +745,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
         </View>
       </Panel>
 
-      <Panel title="Capitale" subtitle="loot et exécution par weekend">
+      <Panel title="Capitale" subtitle="loot et exécution par weekend (ven-lun)">
         <View style={styles.chartWrap}>
           <Bar data={capitalChart} options={chartOptions({ dualAxis: true })} />
         </View>
@@ -1005,6 +1120,10 @@ const styles = StyleSheet.create({
   },
   tableHeaderRow: {
     backgroundColor: "rgba(16, 46, 77, 0.72)",
+  },
+  headerSortCell: {
+    flex: 1,
+    justifyContent: "center",
   },
   tableCell: {
     flex: 1,

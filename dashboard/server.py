@@ -340,21 +340,54 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 tuple(params_snap),
             )
 
-            clan_games_series = _all(
+            clan_games_params: list[Any] = [clan_tag]
+            clan_games_time_clause = ""
+            display_month_floor: datetime | None = None
+            if from_time is not None:
+                lookup_from = from_time - timedelta(days=40)
+                clan_games_time_clause = "AND fetched_at >= %s"
+                clan_games_params.append(lookup_from)
+                display_month_floor = from_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+            clan_games_monthly_raw = _all(
                 cur,
                 f"""
+                WITH monthly_player AS (
+                    SELECT
+                        player_tag,
+                        date_trunc('month', fetched_at) AS month_bucket,
+                        MAX(clan_games_points_total)::BIGINT AS month_total
+                    FROM player_snapshots
+                    WHERE clan_tag = %s
+                      {clan_games_time_clause}
+                    GROUP BY 1, 2
+                ),
+                monthly_clan AS (
+                    SELECT
+                        month_bucket,
+                        COALESCE(SUM(month_total), 0)::BIGINT AS clan_total
+                    FROM monthly_player
+                    GROUP BY 1
+                )
                 SELECT
-                    date_trunc('{scale_conf['snapshot_bucket']}', fetched_at) AS bucket,
-                    ROUND(AVG(clan_games_points_total), 2)::NUMERIC(12,2) AS avg_clan_games,
-                    COALESCE(SUM(clan_games_points_total), 0)::BIGINT AS total_clan_games
-                FROM player_snapshots
-                WHERE clan_tag = %s
-                  {time_clause_snap}
-                GROUP BY 1
-                ORDER BY 1
+                    month_bucket,
+                    clan_total,
+                    GREATEST(
+                        clan_total - COALESCE(LAG(clan_total) OVER (ORDER BY month_bucket), clan_total),
+                        0
+                    )::BIGINT AS monthly_delta
+                FROM monthly_clan
+                ORDER BY month_bucket
                 """,
-                tuple(params_snap),
+                tuple(clan_games_params),
             )
+
+            clan_games_monthly = []
+            for row in clan_games_monthly_raw:
+                month_bucket = row.get("month_bucket")
+                if display_month_floor is not None and isinstance(month_bucket, datetime) and month_bucket < display_month_floor:
+                    continue
+                clan_games_monthly.append(row)
 
             points_delta = 0
             members_delta = 0
@@ -394,9 +427,28 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 f"""
                 SELECT
                     COALESCE(NULLIF(w.war_type, ''), 'regular') AS war_type,
-                    COALESCE(SUM(wmp.attack_capacity), 0)::INT AS attack_capacity,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                            END
+                        ),
+                        0
+                    )::INT AS attack_capacity,
                     COALESCE(SUM(wmp.attacks_used), 0)::INT AS attacks_used,
-                    COALESCE(SUM(wmp.missed_attacks), 0)::INT AS missed_attacks
+                    COALESCE(
+                        SUM(
+                            GREATEST(
+                                CASE
+                                    WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                    ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                END - COALESCE(wmp.attacks_used, 0),
+                                0
+                            )
+                        ),
+                        0
+                    )::INT AS missed_attacks
                 FROM war_member_performances wmp
                 JOIN clan_wars w ON w.war_id = wmp.war_id
                 WHERE w.clan_tag = %s
@@ -525,24 +577,63 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     SELECT
                         wmp.player_tag,
                         MAX(wmp.player_name) AS player_name,
-                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded')::INT AS attack_capacity,
-                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded')::INT AS attacks_used,
-                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded')::INT AS missed_attacks,
+                        SUM(
+                            CASE
+                                WHEN w.state = 'warEnded' THEN
+                                    CASE
+                                        WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                        ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                    END
+                                ELSE 0
+                            END
+                        )::INT AS attack_capacity,
+                        SUM(COALESCE(wmp.attacks_used, 0)) FILTER (WHERE w.state = 'warEnded')::INT AS attacks_used,
+                        SUM(
+                            CASE
+                                WHEN w.state = 'warEnded' THEN
+                                    GREATEST(
+                                        CASE
+                                            WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                            ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                        END - COALESCE(wmp.attacks_used, 0),
+                                        0
+                                    )
+                                ELSE 0
+                            END
+                        )::INT AS missed_attacks,
                         SUM(wmp.total_attack_stars) FILTER (WHERE w.state = 'warEnded')::INT AS attack_stars,
                         ROUND(AVG(COALESCE(wmp.total_attack_destruction, 0)) FILTER (WHERE w.state = 'warEnded'), 2)
                             AS avg_attack_destruction,
-                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular')::INT
-                            AS gdc_attack_capacity,
-                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular')::INT
+                        SUM(
+                            GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                        ) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'regular'
+                        )::INT AS gdc_attack_capacity,
+                        SUM(COALESCE(wmp.attacks_used, 0)) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'regular'
+                        )::INT
                             AS gdc_attacks_used,
-                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular')::INT
-                            AS gdc_missed_attacks,
-                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl')::INT
-                            AS ldc_attack_capacity,
-                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl')::INT
+                        SUM(
+                            GREATEST(GREATEST(COALESCE(wmp.attack_capacity, 2), 1) - COALESCE(wmp.attacks_used, 0), 0)
+                        ) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'regular'
+                        )::INT AS gdc_missed_attacks,
+                        SUM(1) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl'
+                        )::INT AS ldc_attack_capacity,
+                        SUM(COALESCE(wmp.attacks_used, 0)) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl'
+                        )::INT
                             AS ldc_attacks_used,
-                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl')::INT
-                            AS ldc_missed_attacks
+                        SUM(GREATEST(1 - COALESCE(wmp.attacks_used, 0), 0)) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl'
+                        )::INT AS ldc_missed_attacks
                     FROM war_member_performances wmp
                     JOIN clan_wars w ON w.war_id = wmp.war_id
                     WHERE w.clan_tag = %s
@@ -744,13 +835,17 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
 
     clan_games_chart = [
         {
-            "label": _dt_label(point.get("bucket"), scale_conf["snapshot_bucket"]),
-            "bucket": point.get("bucket"),
-            "avg_clan_games": _safe_float(point.get("avg_clan_games")),
-            "total_clan_games": _safe_int(point.get("total_clan_games")),
+            "label": point.get("month_bucket").astimezone().strftime("%m/%Y")
+            if isinstance(point.get("month_bucket"), datetime)
+            else "-",
+            "bucket": point.get("month_bucket"),
+            "clan_total": _safe_int(point.get("clan_total")),
+            "monthly_delta": _safe_int(point.get("monthly_delta")),
         }
-        for point in clan_games_series
+        for point in clan_games_monthly
     ]
+    clan_games_current_month_delta = _safe_int(clan_games_chart[-1].get("monthly_delta")) if clan_games_chart else 0
+    clan_games_previous_month_delta = _safe_int(clan_games_chart[-2].get("monthly_delta")) if len(clan_games_chart) > 1 else 0
 
     return {
         "meta": {
@@ -765,7 +860,8 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             "avg_trophies": round(_safe_float(members_agg.get("avg_trophies")), 1),
             "donations_sent": _safe_int(members_agg.get("donations_sent")),
             "donations_received": _safe_int(members_agg.get("donations_received")),
-            "avg_clan_games": round(_safe_float(members_agg.get("avg_clan_games")), 1),
+            "clan_games_current_month_delta": clan_games_current_month_delta,
+            "clan_games_previous_month_delta": clan_games_previous_month_delta,
             "capital_contributions": _safe_int(members_agg.get("capital_contributions")),
             "clan_points_delta": points_delta,
             "members_delta": members_delta,
@@ -873,6 +969,50 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                     row[f"{metric}_delta"] = delta
                     last_values[metric] = current
 
+            player_clan_games_params: list[Any] = [tag]
+            player_clan_games_time_clause = ""
+            player_display_month_floor: datetime | None = None
+            if from_time is not None:
+                player_clan_games_time_clause = "AND fetched_at >= %s"
+                player_clan_games_params.append(from_time - timedelta(days=40))
+                player_display_month_floor = from_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+            player_clan_games_monthly_raw = _all(
+                cur,
+                f"""
+                WITH monthly AS (
+                    SELECT
+                        date_trunc('month', fetched_at) AS month_bucket,
+                        MAX(clan_games_points_total)::BIGINT AS month_total
+                    FROM player_snapshots
+                    WHERE player_tag = %s
+                      {player_clan_games_time_clause}
+                    GROUP BY 1
+                )
+                SELECT
+                    month_bucket,
+                    month_total,
+                    GREATEST(
+                        month_total - COALESCE(LAG(month_total) OVER (ORDER BY month_bucket), month_total),
+                        0
+                    )::BIGINT AS monthly_delta
+                FROM monthly
+                ORDER BY month_bucket
+                """,
+                tuple(player_clan_games_params),
+            )
+
+            player_clan_games_monthly = []
+            for row in player_clan_games_monthly_raw:
+                month_bucket = row.get("month_bucket")
+                if (
+                    player_display_month_floor is not None
+                    and isinstance(month_bucket, datetime)
+                    and month_bucket < player_display_month_floor
+                ):
+                    continue
+                player_clan_games_monthly.append(row)
+
             params_war: list[Any] = [tag, clan_tag]
             time_clause_war = ""
             if from_time is not None:
@@ -890,9 +1030,26 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                     w.end_time,
                     w.opponent_name,
                     w.outcome,
-                    wmp.attacks_used,
-                    wmp.attack_capacity,
-                    wmp.missed_attacks,
+                    COALESCE(wmp.attacks_used, 0)::INT AS attacks_used,
+                    (
+                        CASE
+                            WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                            ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                        END
+                    )::INT AS attack_capacity,
+                    (
+                        CASE
+                            WHEN w.state = 'warEnded' THEN
+                                GREATEST(
+                                    CASE
+                                        WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                        ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                    END - COALESCE(wmp.attacks_used, 0),
+                                    0
+                                )
+                            ELSE 0
+                        END
+                    )::INT AS missed_attacks,
                     wmp.total_attack_stars,
                     wmp.total_attack_destruction
                 FROM war_member_performances wmp
@@ -912,35 +1069,82 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 f"""
                 SELECT
                     COALESCE(SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS attacks_used,
-                    COALESCE(SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS attack_capacity,
-                    COALESCE(SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS missed_attacks,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN w.state = 'warEnded' THEN
+                                    CASE
+                                        WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                        ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                    END
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    )::INT AS attack_capacity,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN w.state = 'warEnded' THEN
+                                    GREATEST(
+                                        CASE
+                                            WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                            ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                        END - COALESCE(wmp.attacks_used, 0),
+                                        0
+                                    )
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    )::INT AS missed_attacks,
                     COALESCE(SUM(wmp.total_attack_stars) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS attack_stars,
                     ROUND(
                         AVG(COALESCE(wmp.total_attack_destruction, 0)) FILTER (WHERE w.state = 'warEnded'),
                         2
                     ) AS avg_attack_destruction,
                     COALESCE(
-                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular'),
+                        SUM(wmp.attacks_used) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'regular'
+                        ),
                         0
                     )::INT AS gdc_attacks_used,
                     COALESCE(
-                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular'),
+                        SUM(GREATEST(COALESCE(wmp.attack_capacity, 2), 1)) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'regular'
+                        ),
                         0
                     )::INT AS gdc_attack_capacity,
                     COALESCE(
-                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular'),
+                        SUM(GREATEST(GREATEST(COALESCE(wmp.attack_capacity, 2), 1) - COALESCE(wmp.attacks_used, 0), 0))
+                            FILTER (
+                                WHERE w.state = 'warEnded'
+                                  AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'regular'
+                            ),
                         0
                     )::INT AS gdc_missed_attacks,
                     COALESCE(
-                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl'),
+                        SUM(wmp.attacks_used) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl'
+                        ),
                         0
                     )::INT AS ldc_attacks_used,
                     COALESCE(
-                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl'),
+                        SUM(1) FILTER (
+                            WHERE w.state = 'warEnded'
+                              AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl'
+                        ),
                         0
                     )::INT AS ldc_attack_capacity,
                     COALESCE(
-                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl'),
+                        SUM(GREATEST(1 - COALESCE(wmp.attacks_used, 0), 0))
+                            FILTER (
+                                WHERE w.state = 'warEnded'
+                                  AND COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl'
+                            ),
                         0
                     )::INT AS ldc_missed_attacks
                 FROM war_member_performances wmp
@@ -1012,6 +1216,12 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
             "missed_attacks": _safe_int(war_summary.get("ldc_missed_attacks")),
         },
     }
+    summary["clan_games_current_month_delta"] = (
+        _safe_int(player_clan_games_monthly[-1].get("monthly_delta")) if player_clan_games_monthly else 0
+    )
+    summary["clan_games_previous_month_delta"] = (
+        _safe_int(player_clan_games_monthly[-2].get("monthly_delta")) if len(player_clan_games_monthly) > 1 else 0
+    )
 
     summary["overall"]["participation_rate"] = _compute_participation_rate(
         summary["overall"]["attacks_used"],
@@ -1079,6 +1289,17 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
         }
         for row in capital_history_chrono
     ]
+    chart_clan_games_monthly = [
+        {
+            "label": row.get("month_bucket").astimezone().strftime("%m/%Y")
+            if isinstance(row.get("month_bucket"), datetime)
+            else "-",
+            "bucket": row.get("month_bucket"),
+            "month_total": _safe_int(row.get("month_total")),
+            "monthly_delta": _safe_int(row.get("monthly_delta")),
+        }
+        for row in player_clan_games_monthly
+    ]
 
     return {
         "meta": {
@@ -1106,6 +1327,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 "ldc": chart_wars_ldc,
             },
             "capital_history": chart_capital,
+            "clan_games_monthly": chart_clan_games_monthly,
         },
     }
 
