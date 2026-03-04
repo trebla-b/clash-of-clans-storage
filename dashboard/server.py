@@ -4,16 +4,20 @@ from datetime import datetime, timedelta, timezone
 import os
 from typing import Any
 
-from flask import Flask, abort, render_template, request
+from flask import Flask, abort, jsonify, request
 import psycopg
 from psycopg.rows import dict_row
 from waitress import serve
 
-from app.config import load_config
+from app.config import DEFAULT_DB_URL, load_config
 
-CONFIG = load_config()
-DB_URL = os.getenv("DASHBOARD_DB_URL", CONFIG.db_url)
-DEFAULT_CLAN_TAG = os.getenv("DASHBOARD_CLAN_TAG", CONFIG.clan_id)
+try:
+    CONFIG = load_config()
+except Exception:  # noqa: BLE001
+    CONFIG = None
+
+DB_URL = os.getenv("DASHBOARD_DB_URL") or (CONFIG.db_url if CONFIG else DEFAULT_DB_URL)
+DEFAULT_CLAN_TAG = os.getenv("DASHBOARD_CLAN_TAG") or (CONFIG.clan_id if CONFIG else "")
 
 SCALES: dict[str, dict[str, Any]] = {
     "7d": {"label": "7 jours", "days": 7, "snapshot_bucket": "hour", "war_bucket": "day"},
@@ -24,7 +28,12 @@ SCALES: dict[str, dict[str, Any]] = {
 }
 DEFAULT_SCALE = "30d"
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+WAR_TYPE_MAP = {
+    "regular": "gdc",
+    "cwl": "ldc",
+}
+
+app = Flask(__name__)
 
 
 def _connect() -> psycopg.Connection:
@@ -63,19 +72,6 @@ def _from_time(scale_key: str) -> datetime | None:
     if days is None:
         return None
     return datetime.now(timezone.utc) - timedelta(days=int(days))
-
-
-def _dt_label(value: datetime | None, bucket: str) -> str:
-    if value is None:
-        return "-"
-    local = value.astimezone()
-    if bucket == "hour":
-        return local.strftime("%d/%m %Hh")
-    if bucket == "day":
-        return local.strftime("%d/%m")
-    if bucket == "week":
-        return "S" + local.strftime("%V")
-    return local.strftime("%m/%Y")
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -150,7 +146,6 @@ def _compute_clan_health(
 
 
 def _compute_player_health(
-    attacks_used: int,
     attack_capacity: int,
     missed_attacks: int,
     donations: int,
@@ -181,32 +176,55 @@ def _compute_player_health(
     )
 
 
-@app.template_filter("intfmt")
-def intfmt(value: Any) -> str:
-    try:
-        return f"{int(round(float(value))):,}".replace(",", " ")
-    except (TypeError, ValueError):
-        return "0"
-
-
-@app.template_filter("pctfmt")
-def pctfmt(value: Any) -> str:
-    try:
-        return f"{float(value):.1f}%"
-    except (TypeError, ValueError):
-        return "0.0%"
-
-
-@app.template_filter("dtfmt")
-def dtfmt(value: Any) -> str:
+def _dt_label(value: datetime | None, bucket: str) -> str:
     if value is None:
-        return "n/a"
+        return "-"
+    local = value.astimezone()
+    if bucket == "hour":
+        return local.strftime("%d/%m %Hh")
+    if bucket == "day":
+        return local.strftime("%d/%m")
+    if bucket == "week":
+        return "S" + local.strftime("%V")
+    return local.strftime("%m/%Y")
+
+
+def _war_bucket_key(raw_type: str | None) -> str:
+    return WAR_TYPE_MAP.get(str(raw_type or "").lower(), "gdc")
+
+
+def _war_summary_row(row: dict[str, Any]) -> dict[str, Any]:
+    wars_ended = _safe_int(row.get("wars_ended"))
+    wins = _safe_int(row.get("wins"))
+    return {
+        "wars_ended": wars_ended,
+        "wins": wins,
+        "losses": _safe_int(row.get("losses")),
+        "draws": _safe_int(row.get("draws")),
+        "attack_capacity": _safe_int(row.get("attack_capacity")),
+        "attacks_used": _safe_int(row.get("attacks_used")),
+        "missed_attacks": _safe_int(row.get("missed_attacks")),
+        "win_rate": round((wins / wars_ended) * 100.0, 1) if wars_ended > 0 else 0.0,
+    }
+
+
+def _compute_participation_rate(attacks_used: int, attack_capacity: int) -> float:
+    if attack_capacity <= 0:
+        return 0.0
+    return round((attacks_used / attack_capacity) * 100.0, 1)
+
+
+def _serialize_json(value: Any) -> Any:
     if isinstance(value, datetime):
-        return value.astimezone().strftime("%d/%m/%Y %H:%M")
-    return str(value)
+        return value.isoformat()
+    if isinstance(value, list):
+        return [_serialize_json(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _serialize_json(item) for key, item in value.items()}
+    return value
 
 
-def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_overview(scale_key: str) -> dict[str, Any]:
     from_time = _from_time(scale_key)
     scale_conf = SCALES[scale_key]
 
@@ -252,24 +270,33 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 )
 
             if not clan:
-                empty = {
+                return {
+                    "meta": {
+                        "scale": scale_key,
+                        "scale_label": scale_conf["label"],
+                        "scales": _scale_options(),
+                        "generated_at": datetime.now(timezone.utc),
+                    },
                     "clan": {"tag": DEFAULT_CLAN_TAG, "name": "Aucune donnée", "members": 0},
-                    "clan_tag": DEFAULT_CLAN_TAG,
                     "kpis": {},
-                    "war_summary": {},
-                    "health": {"score": 0, "grade": "D", "components": {}},
+                    "wars": {
+                        "overall": _war_summary_row({}),
+                        "gdc": _war_summary_row({}),
+                        "ldc": _war_summary_row({}),
+                    },
+                    "health": {"score": 0.0, "grade": "D", "components": {}},
                     "players": [],
-                    "capital_top": [],
                     "at_risk": [],
+                    "top_contributors": [],
+                    "capital": {"latest": {}, "top_members": [], "used_attacks": 0, "capacity_attacks": 0},
                     "freshness": {},
+                    "charts": {
+                        "clan_points": [],
+                        "war_outcomes": {"gdc": [], "ldc": [], "overall": []},
+                        "health_components": [],
+                        "clan_games": [],
+                    },
                 }
-                empty_chart = {
-                    "clan_points": [],
-                    "war_outcomes": [],
-                    "health_components": [],
-                    "scale": scale_key,
-                }
-                return empty, empty_chart
 
             clan_tag = str(clan["tag"])
 
@@ -313,6 +340,22 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 tuple(params_snap),
             )
 
+            clan_games_series = _all(
+                cur,
+                f"""
+                SELECT
+                    date_trunc('{scale_conf['snapshot_bucket']}', fetched_at) AS bucket,
+                    ROUND(AVG(clan_games_points_total), 2)::NUMERIC(12,2) AS avg_clan_games,
+                    COALESCE(SUM(clan_games_points_total), 0)::BIGINT AS total_clan_games
+                FROM player_snapshots
+                WHERE clan_tag = %s
+                  {time_clause_snap}
+                GROUP BY 1
+                ORDER BY 1
+                """,
+                tuple(params_snap),
+            )
+
             points_delta = 0
             members_delta = 0
             if len(clan_points_series) >= 2:
@@ -329,10 +372,11 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 time_clause_war = "AND start_time >= %s"
                 params_war.append(from_time)
 
-            war_summary = _one(
+            war_summary_rows = _all(
                 cur,
                 f"""
                 SELECT
+                    COALESCE(NULLIF(war_type, ''), 'regular') AS war_type,
                     COUNT(*) FILTER (WHERE state = 'warEnded')::INT AS wars_ended,
                     COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'win')::INT AS wins,
                     COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'loss')::INT AS losses,
@@ -340,39 +384,16 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 FROM clan_wars
                 WHERE clan_tag = %s
                   {time_clause_war}
-                """,
-                tuple(params_war),
-            )
-
-            war_summary["win_rate"] = 0.0
-            wars_ended = _safe_int(war_summary.get("wars_ended"))
-            if wars_ended > 0:
-                war_summary["win_rate"] = round(
-                    (_safe_int(war_summary.get("wins")) / wars_ended) * 100.0,
-                    1,
-                )
-
-            war_outcomes_series = _all(
-                cur,
-                f"""
-                SELECT
-                    date_trunc('{scale_conf['war_bucket']}', start_time) AS bucket,
-                    COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'win')::INT AS wins,
-                    COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'loss')::INT AS losses,
-                    COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'draw')::INT AS draws
-                FROM clan_wars
-                WHERE clan_tag = %s
-                  {time_clause_war}
                 GROUP BY 1
-                ORDER BY 1
                 """,
                 tuple(params_war),
             )
 
-            war_participation = _one(
+            participation_rows = _all(
                 cur,
                 f"""
                 SELECT
+                    COALESCE(NULLIF(w.war_type, ''), 'regular') AS war_type,
                     COALESCE(SUM(wmp.attack_capacity), 0)::INT AS attack_capacity,
                     COALESCE(SUM(wmp.attacks_used), 0)::INT AS attacks_used,
                     COALESCE(SUM(wmp.missed_attacks), 0)::INT AS missed_attacks
@@ -380,7 +401,61 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 JOIN clan_wars w ON w.war_id = wmp.war_id
                 WHERE w.clan_tag = %s
                   AND wmp.is_our_clan = TRUE
+                  AND w.state = 'warEnded'
                   {time_clause_war}
+                GROUP BY 1
+                """,
+                tuple(params_war),
+            )
+
+            summary_raw = {
+                "gdc": {},
+                "ldc": {},
+            }
+            for row in war_summary_rows:
+                summary_raw[_war_bucket_key(str(row.get("war_type") or "regular"))] = row
+
+            participation_raw = {
+                "gdc": {},
+                "ldc": {},
+            }
+            for row in participation_rows:
+                participation_raw[_war_bucket_key(str(row.get("war_type") or "regular"))] = row
+
+            wars_by_type: dict[str, dict[str, Any]] = {}
+            for key in ("gdc", "ldc"):
+                merged = {
+                    **summary_raw.get(key, {}),
+                    **participation_raw.get(key, {}),
+                }
+                wars_by_type[key] = _war_summary_row(merged)
+
+            wars_overall = _war_summary_row(
+                {
+                    "wars_ended": wars_by_type["gdc"]["wars_ended"] + wars_by_type["ldc"]["wars_ended"],
+                    "wins": wars_by_type["gdc"]["wins"] + wars_by_type["ldc"]["wins"],
+                    "losses": wars_by_type["gdc"]["losses"] + wars_by_type["ldc"]["losses"],
+                    "draws": wars_by_type["gdc"]["draws"] + wars_by_type["ldc"]["draws"],
+                    "attack_capacity": wars_by_type["gdc"]["attack_capacity"] + wars_by_type["ldc"]["attack_capacity"],
+                    "attacks_used": wars_by_type["gdc"]["attacks_used"] + wars_by_type["ldc"]["attacks_used"],
+                    "missed_attacks": wars_by_type["gdc"]["missed_attacks"] + wars_by_type["ldc"]["missed_attacks"],
+                }
+            )
+
+            war_outcomes_rows = _all(
+                cur,
+                f"""
+                SELECT
+                    date_trunc('{scale_conf['war_bucket']}', start_time) AS bucket,
+                    COALESCE(NULLIF(war_type, ''), 'regular') AS war_type,
+                    COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'win')::INT AS wins,
+                    COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'loss')::INT AS losses,
+                    COUNT(*) FILTER (WHERE state = 'warEnded' AND outcome = 'draw')::INT AS draws
+                FROM clan_wars
+                WHERE clan_tag = %s
+                  {time_clause_war}
+                GROUP BY 1, 2
+                ORDER BY 1, 2
                 """,
                 tuple(params_war),
             )
@@ -391,9 +466,12 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 SELECT
                     season_start_time,
                     season_end_time,
+                    state,
                     capital_total_loot,
                     total_attacks,
-                    enemy_districts_destroyed
+                    enemy_districts_destroyed,
+                    offensive_reward,
+                    defensive_reward
                 FROM capital_raid_seasons
                 WHERE clan_tag = %s
                 ORDER BY season_start_time DESC
@@ -420,7 +498,7 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                     WHERE clan_tag = %s
                       AND season_start_time = %s
                     ORDER BY capital_resources_looted DESC NULLS LAST, attacks DESC
-                    LIMIT 10
+                    LIMIT 12
                     """,
                     (clan_tag, latest_capital["season_start_time"]),
                 )
@@ -447,11 +525,24 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                     SELECT
                         wmp.player_tag,
                         MAX(wmp.player_name) AS player_name,
-                        SUM(wmp.attack_capacity)::INT AS attack_capacity,
-                        SUM(wmp.attacks_used)::INT AS attacks_used,
-                        SUM(wmp.missed_attacks)::INT AS missed_attacks,
-                        SUM(wmp.total_attack_stars)::INT AS attack_stars,
-                        ROUND(AVG(COALESCE(wmp.total_attack_destruction, 0)), 2) AS avg_attack_destruction
+                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded')::INT AS attack_capacity,
+                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded')::INT AS attacks_used,
+                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded')::INT AS missed_attacks,
+                        SUM(wmp.total_attack_stars) FILTER (WHERE w.state = 'warEnded')::INT AS attack_stars,
+                        ROUND(AVG(COALESCE(wmp.total_attack_destruction, 0)) FILTER (WHERE w.state = 'warEnded'), 2)
+                            AS avg_attack_destruction,
+                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular')::INT
+                            AS gdc_attack_capacity,
+                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular')::INT
+                            AS gdc_attacks_used,
+                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular')::INT
+                            AS gdc_missed_attacks,
+                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl')::INT
+                            AS ldc_attack_capacity,
+                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl')::INT
+                            AS ldc_attacks_used,
+                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl')::INT
+                            AS ldc_missed_attacks
                     FROM war_member_performances wmp
                     JOIN clan_wars w ON w.war_id = wmp.war_id
                     WHERE w.clan_tag = %s
@@ -480,6 +571,12 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                     COALESCE(w.missed_attacks, 0)::INT AS missed_attacks,
                     COALESCE(w.attack_stars, 0)::INT AS attack_stars,
                     COALESCE(w.avg_attack_destruction, 0)::NUMERIC(8,2) AS avg_attack_destruction,
+                    COALESCE(w.gdc_attack_capacity, 0)::INT AS gdc_attack_capacity,
+                    COALESCE(w.gdc_attacks_used, 0)::INT AS gdc_attacks_used,
+                    COALESCE(w.gdc_missed_attacks, 0)::INT AS gdc_missed_attacks,
+                    COALESCE(w.ldc_attack_capacity, 0)::INT AS ldc_attack_capacity,
+                    COALESCE(w.ldc_attacks_used, 0)::INT AS ldc_attacks_used,
+                    COALESCE(w.ldc_missed_attacks, 0)::INT AS ldc_missed_attacks,
                     f.last_snapshot_at
                 FROM v_current_clan_members m
                 LEFT JOIN war w ON w.player_tag = m.player_tag
@@ -497,12 +594,17 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 if isinstance(last_snapshot, datetime):
                     freshness_hours = max((now_utc - last_snapshot).total_seconds() / 3600.0, 0.0)
 
-                attack_capacity = _safe_int(row.get("attack_capacity"))
-                missed_attacks = _safe_int(row.get("missed_attacks"))
-                row["participation_rate"] = round(
-                    ((attack_capacity - missed_attacks) / attack_capacity) * 100.0,
-                    1,
-                ) if attack_capacity > 0 else 0.0
+                overall_capacity = _safe_int(row.get("attack_capacity"))
+                overall_used = _safe_int(row.get("attacks_used"))
+                overall_missed = _safe_int(row.get("missed_attacks"))
+
+                gdc_capacity = _safe_int(row.get("gdc_attack_capacity"))
+                gdc_used = _safe_int(row.get("gdc_attacks_used"))
+                gdc_missed = _safe_int(row.get("gdc_missed_attacks"))
+
+                ldc_capacity = _safe_int(row.get("ldc_attack_capacity"))
+                ldc_used = _safe_int(row.get("ldc_attacks_used"))
+                ldc_missed = _safe_int(row.get("ldc_missed_attacks"))
 
                 capital_ratio = 0.0
                 if latest_capital:
@@ -517,10 +619,30 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
                         if cap > 0:
                             capital_ratio = _safe_int(player_cap_entry.get("attacks")) / cap
 
+                row["overall"] = {
+                    "attack_capacity": overall_capacity,
+                    "attacks_used": overall_used,
+                    "missed_attacks": overall_missed,
+                    "attack_stars": _safe_int(row.get("attack_stars")),
+                    "avg_attack_destruction": _safe_float(row.get("avg_attack_destruction")),
+                    "participation_rate": _compute_participation_rate(overall_used, overall_capacity),
+                }
+                row["gdc"] = {
+                    "attack_capacity": gdc_capacity,
+                    "attacks_used": gdc_used,
+                    "missed_attacks": gdc_missed,
+                    "participation_rate": _compute_participation_rate(gdc_used, gdc_capacity),
+                }
+                row["ldc"] = {
+                    "attack_capacity": ldc_capacity,
+                    "attacks_used": ldc_used,
+                    "missed_attacks": ldc_missed,
+                    "participation_rate": _compute_participation_rate(ldc_used, ldc_capacity),
+                }
+
                 row["health_score"] = _compute_player_health(
-                    attacks_used=_safe_int(row.get("attacks_used")),
-                    attack_capacity=attack_capacity,
-                    missed_attacks=missed_attacks,
+                    attack_capacity=overall_capacity,
+                    missed_attacks=overall_missed,
                     donations=_safe_int(row.get("donations")),
                     capital_ratio=capital_ratio,
                     freshness_hours=freshness_hours,
@@ -531,19 +653,19 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
             at_risk = sorted(
                 player_rows,
                 key=lambda row: (
-                    -_safe_int(row.get("missed_attacks")),
+                    -_safe_int(row.get("overall", {}).get("missed_attacks")),
                     _safe_float(row.get("health_score")),
                 ),
-            )[:8]
+            )[:10]
 
             top_contributors = sorted(
                 player_rows,
                 key=lambda row: (
                     -_safe_int(row.get("donations")),
                     -_safe_int(row.get("clan_capital_contributions")),
-                    -_safe_int(row.get("attack_stars")),
+                    -_safe_int(row.get("overall", {}).get("attack_stars")),
                 ),
-            )[:8]
+            )[:10]
 
             freshness = _one(
                 cur,
@@ -563,8 +685,8 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
         freshness_hours = max((datetime.now(timezone.utc) - latest_snapshot).total_seconds() / 3600.0, 0.0)
 
     health = _compute_clan_health(
-        war_capacity=_safe_int(war_participation.get("attack_capacity")),
-        war_missed=_safe_int(war_participation.get("missed_attacks")),
+        war_capacity=wars_overall["attack_capacity"],
+        war_missed=wars_overall["missed_attacks"],
         donations_avg=_safe_float(members_agg.get("avg_social_score")),
         capital_capacity=capital_capacity,
         capital_used=capital_used,
@@ -574,38 +696,70 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
     chart_points = [
         {
             "label": _dt_label(point.get("bucket"), scale_conf["snapshot_bucket"]),
+            "bucket": point.get("bucket"),
             "clan_points": _safe_int(point.get("clan_points")),
             "members": _safe_int(point.get("members")),
         }
         for point in clan_points_series
     ]
 
-    chart_wars = [
-        {
-            "label": _dt_label(point.get("bucket"), scale_conf["war_bucket"]),
-            "wins": _safe_int(point.get("wins")),
-            "losses": _safe_int(point.get("losses")),
-            "draws": _safe_int(point.get("draws")),
+    war_outcomes = {
+        "gdc": [],
+        "ldc": [],
+        "overall": [],
+    }
+    overall_by_bucket: dict[str, dict[str, Any]] = {}
+
+    for row in war_outcomes_rows:
+        bucket_dt = row.get("bucket")
+        bucket_label = _dt_label(bucket_dt, scale_conf["war_bucket"])
+        item = {
+            "label": bucket_label,
+            "bucket": bucket_dt,
+            "wins": _safe_int(row.get("wins")),
+            "losses": _safe_int(row.get("losses")),
+            "draws": _safe_int(row.get("draws")),
         }
-        for point in war_outcomes_series
+        bucket_key = _war_bucket_key(str(row.get("war_type") or "regular"))
+        war_outcomes[bucket_key].append(item)
+
+        agg = overall_by_bucket.setdefault(
+            bucket_label,
+            {
+                "label": bucket_label,
+                "bucket": bucket_dt,
+                "wins": 0,
+                "losses": 0,
+                "draws": 0,
+            },
+        )
+        agg["wins"] += item["wins"]
+        agg["losses"] += item["losses"]
+        agg["draws"] += item["draws"]
+
+    war_outcomes["overall"] = sorted(
+        overall_by_bucket.values(),
+        key=lambda row: row["bucket"].timestamp() if isinstance(row.get("bucket"), datetime) else 0.0,
+    )
+
+    clan_games_chart = [
+        {
+            "label": _dt_label(point.get("bucket"), scale_conf["snapshot_bucket"]),
+            "bucket": point.get("bucket"),
+            "avg_clan_games": _safe_float(point.get("avg_clan_games")),
+            "total_clan_games": _safe_int(point.get("total_clan_games")),
+        }
+        for point in clan_games_series
     ]
 
-    chart_payload = {
-        "scale": scale_key,
-        "clan_points": chart_points,
-        "war_outcomes": chart_wars,
-        "health_components": [
-            {"label": key.replace("_", " ").title(), "value": _safe_float(value)}
-            for key, value in health["components"].items()
-        ],
-    }
-
-    data_payload: dict[str, Any] = {
+    return {
+        "meta": {
+            "scale": scale_key,
+            "scale_label": scale_conf["label"],
+            "scales": _scale_options(),
+            "generated_at": datetime.now(timezone.utc),
+        },
         "clan": clan,
-        "clan_tag": clan_tag,
-        "scale_key": scale_key,
-        "scale_label": scale_conf["label"],
-        "scales": _scale_options(),
         "kpis": {
             "active_members": _safe_int(members_agg.get("active_members")),
             "avg_trophies": round(_safe_float(members_agg.get("avg_trophies")), 1),
@@ -616,29 +770,35 @@ def _load_overview(scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
             "clan_points_delta": points_delta,
             "members_delta": members_delta,
         },
-        "war_summary": {
-            "wars_ended": _safe_int(war_summary.get("wars_ended")),
-            "wins": _safe_int(war_summary.get("wins")),
-            "losses": _safe_int(war_summary.get("losses")),
-            "draws": _safe_int(war_summary.get("draws")),
-            "win_rate": _safe_float(war_summary.get("win_rate")),
-            "attack_capacity": _safe_int(war_participation.get("attack_capacity")),
-            "attacks_used": _safe_int(war_participation.get("attacks_used")),
-            "missed_attacks": _safe_int(war_participation.get("missed_attacks")),
+        "wars": {
+            "overall": wars_overall,
+            "gdc": wars_by_type["gdc"],
+            "ldc": wars_by_type["ldc"],
         },
         "health": health,
         "players": player_rows,
         "at_risk": at_risk,
         "top_contributors": top_contributors,
-        "latest_capital": latest_capital,
-        "capital_top": capital_top,
+        "capital": {
+            "latest": latest_capital,
+            "top_members": capital_top,
+            "used_attacks": capital_used,
+            "capacity_attacks": capital_capacity,
+        },
         "freshness": freshness,
+        "charts": {
+            "clan_points": chart_points,
+            "war_outcomes": war_outcomes,
+            "health_components": [
+                {"label": key.replace("_", " ").title(), "value": _safe_float(value)}
+                for key, value in health["components"].items()
+            ],
+            "clan_games": clan_games_chart,
+        },
     }
 
-    return data_payload, chart_payload
 
-
-def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
     tag = _normalize_tag(player_tag)
     scale_conf = SCALES[scale_key]
     from_time = _from_time(scale_key)
@@ -704,11 +864,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
                 "clan_capital_contributions": None,
             }
             for row in snapshots:
-                for metric in (
-                    "donations",
-                    "clan_games_points_total",
-                    "clan_capital_contributions",
-                ):
+                for metric in ("donations", "clan_games_points_total", "clan_capital_contributions"):
                     current = _safe_int(row.get(metric))
                     previous = last_values[metric]
                     delta = 0
@@ -746,7 +902,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
                   AND w.clan_tag = %s
                   {time_clause_war}
                 ORDER BY w.start_time DESC
-                LIMIT 40
+                LIMIT 60
                 """,
                 tuple(params_war),
             )
@@ -755,11 +911,38 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
                 cur,
                 f"""
                 SELECT
-                    COALESCE(SUM(wmp.attacks_used), 0)::INT AS attacks_used,
-                    COALESCE(SUM(wmp.attack_capacity), 0)::INT AS attack_capacity,
-                    COALESCE(SUM(wmp.missed_attacks), 0)::INT AS missed_attacks,
-                    COALESCE(SUM(wmp.total_attack_stars), 0)::INT AS attack_stars,
-                    ROUND(AVG(COALESCE(wmp.total_attack_destruction, 0)), 2) AS avg_attack_destruction
+                    COALESCE(SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS attacks_used,
+                    COALESCE(SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS attack_capacity,
+                    COALESCE(SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS missed_attacks,
+                    COALESCE(SUM(wmp.total_attack_stars) FILTER (WHERE w.state = 'warEnded'), 0)::INT AS attack_stars,
+                    ROUND(
+                        AVG(COALESCE(wmp.total_attack_destruction, 0)) FILTER (WHERE w.state = 'warEnded'),
+                        2
+                    ) AS avg_attack_destruction,
+                    COALESCE(
+                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular'),
+                        0
+                    )::INT AS gdc_attacks_used,
+                    COALESCE(
+                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular'),
+                        0
+                    )::INT AS gdc_attack_capacity,
+                    COALESCE(
+                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'regular'),
+                        0
+                    )::INT AS gdc_missed_attacks,
+                    COALESCE(
+                        SUM(wmp.attacks_used) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl'),
+                        0
+                    )::INT AS ldc_attacks_used,
+                    COALESCE(
+                        SUM(wmp.attack_capacity) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl'),
+                        0
+                    )::INT AS ldc_attack_capacity,
+                    COALESCE(
+                        SUM(wmp.missed_attacks) FILTER (WHERE w.state = 'warEnded' AND w.war_type = 'cwl'),
+                        0
+                    )::INT AS ldc_missed_attacks
                 FROM war_member_performances wmp
                 JOIN clan_wars w ON w.war_id = wmp.war_id
                 WHERE wmp.player_tag = %s
@@ -810,18 +993,55 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
     cap_limit = _safe_int(latest_cap.get("attack_limit")) + _safe_int(latest_cap.get("bonus_attack_limit"))
     cap_ratio = (_safe_int(latest_cap.get("attacks")) / cap_limit) if cap_limit > 0 else 0.0
 
+    summary = {
+        "overall": {
+            "attacks_used": _safe_int(war_summary.get("attacks_used")),
+            "attack_capacity": _safe_int(war_summary.get("attack_capacity")),
+            "missed_attacks": _safe_int(war_summary.get("missed_attacks")),
+            "attack_stars": _safe_int(war_summary.get("attack_stars")),
+            "avg_attack_destruction": _safe_float(war_summary.get("avg_attack_destruction")),
+        },
+        "gdc": {
+            "attacks_used": _safe_int(war_summary.get("gdc_attacks_used")),
+            "attack_capacity": _safe_int(war_summary.get("gdc_attack_capacity")),
+            "missed_attacks": _safe_int(war_summary.get("gdc_missed_attacks")),
+        },
+        "ldc": {
+            "attacks_used": _safe_int(war_summary.get("ldc_attacks_used")),
+            "attack_capacity": _safe_int(war_summary.get("ldc_attack_capacity")),
+            "missed_attacks": _safe_int(war_summary.get("ldc_missed_attacks")),
+        },
+    }
+
+    summary["overall"]["participation_rate"] = _compute_participation_rate(
+        summary["overall"]["attacks_used"],
+        summary["overall"]["attack_capacity"],
+    )
+    summary["gdc"]["participation_rate"] = _compute_participation_rate(
+        summary["gdc"]["attacks_used"],
+        summary["gdc"]["attack_capacity"],
+    )
+    summary["ldc"]["participation_rate"] = _compute_participation_rate(
+        summary["ldc"]["attacks_used"],
+        summary["ldc"]["attack_capacity"],
+    )
+
     player_health = _compute_player_health(
-        attacks_used=_safe_int(war_summary.get("attacks_used")),
-        attack_capacity=_safe_int(war_summary.get("attack_capacity")),
-        missed_attacks=_safe_int(war_summary.get("missed_attacks")),
+        attack_capacity=summary["overall"]["attack_capacity"],
+        missed_attacks=summary["overall"]["missed_attacks"],
         donations=_safe_int(player.get("donations")),
         capital_ratio=cap_ratio,
         freshness_hours=freshness_hours,
     )
 
+    war_history_chrono = list(reversed(war_history))
+    for row in war_history_chrono:
+        row["war_family"] = _war_bucket_key(str(row.get("war_type") or "regular"))
+
     chart_snapshots = [
         {
             "label": _dt_label(point.get("bucket"), scale_conf["snapshot_bucket"]),
+            "bucket": point.get("bucket"),
             "trophies": _safe_int(point.get("trophies")),
             "donations_delta": _safe_int(point.get("donations_delta")),
             "clan_games_delta": _safe_int(point.get("clan_games_points_total_delta")),
@@ -830,17 +1050,21 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
         for point in snapshots
     ]
 
-    war_history_chrono = list(reversed(war_history))
-    chart_wars = [
+    chart_wars_all = [
         {
             "label": row.get("start_time").astimezone().strftime("%d/%m") if isinstance(row.get("start_time"), datetime) else "-",
+            "bucket": row.get("start_time"),
             "used": _safe_int(row.get("attacks_used")),
             "capacity": _safe_int(row.get("attack_capacity")),
             "missed": _safe_int(row.get("missed_attacks")),
             "stars": _safe_int(row.get("total_attack_stars")),
+            "war_family": row.get("war_family"),
+            "state": row.get("state") or "unknown",
         }
         for row in war_history_chrono
     ]
+    chart_wars_gdc = [row for row in chart_wars_all if row["war_family"] == "gdc"]
+    chart_wars_ldc = [row for row in chart_wars_all if row["war_family"] == "ldc"]
 
     capital_history_chrono = list(reversed(capital_history))
     chart_capital = [
@@ -848,6 +1072,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
             "label": row.get("season_start_time").astimezone().strftime("%d/%m")
             if isinstance(row.get("season_start_time"), datetime)
             else "-",
+            "bucket": row.get("season_start_time"),
             "loot": _safe_int(row.get("capital_resources_looted")),
             "attacks": _safe_int(row.get("attacks")),
             "capacity": _safe_int(row.get("attack_limit")) + _safe_int(row.get("bonus_attack_limit")),
@@ -855,47 +1080,57 @@ def _load_player_detail(player_tag: str, scale_key: str) -> tuple[dict[str, Any]
         for row in capital_history_chrono
     ]
 
-    chart_payload = {
-        "scale": scale_key,
-        "snapshots": chart_snapshots,
-        "war_history": chart_wars,
-        "capital_history": chart_capital,
-    }
-
-    data_payload: dict[str, Any] = {
-        "player": player,
-        "clan_tag": clan_tag,
-        "scale_key": scale_key,
-        "scale_label": scale_conf["label"],
-        "scales": _scale_options(),
-        "player_health": player_health,
-        "war_summary": {
-            "attacks_used": _safe_int(war_summary.get("attacks_used")),
-            "attack_capacity": _safe_int(war_summary.get("attack_capacity")),
-            "missed_attacks": _safe_int(war_summary.get("missed_attacks")),
-            "attack_stars": _safe_int(war_summary.get("attack_stars")),
-            "avg_attack_destruction": _safe_float(war_summary.get("avg_attack_destruction")),
+    return {
+        "meta": {
+            "scale": scale_key,
+            "scale_label": scale_conf["label"],
+            "scales": _scale_options(),
+            "generated_at": datetime.now(timezone.utc),
         },
-        "war_history": war_history,
-        "capital_history": capital_history,
-        "freshness_hours": round(freshness_hours, 1),
+        "player": player,
+        "summary": {
+            **summary,
+            "player_health": player_health,
+            "freshness_hours": round(freshness_hours, 1),
+        },
+        "histories": {
+            "wars": war_history,
+            "capital": capital_history,
+            "snapshots": snapshots,
+        },
+        "charts": {
+            "snapshots": chart_snapshots,
+            "war_history": {
+                "overall": chart_wars_all,
+                "gdc": chart_wars_gdc,
+                "ldc": chart_wars_ldc,
+            },
+            "capital_history": chart_capital,
+        },
     }
-
-    return data_payload, chart_payload
 
 
 @app.get("/")
-def dashboard() -> str:
-    scale_key = _resolve_scale(request.args.get("scale"))
-    data, chart_data = _load_overview(scale_key)
-    return render_template("index.html", data=data, chart_data=chart_data)
+def root() -> tuple[dict[str, Any], int]:
+    return {
+        "service": "clash-dashboard-api",
+        "status": "ok",
+        "endpoints": ["/health", "/api/overview", "/api/player/<player_tag>"],
+    }, 200
 
 
-@app.get("/players/<player_tag>")
-def player_detail(player_tag: str) -> str:
+@app.get("/api/overview")
+def api_overview() -> tuple[Any, int]:
     scale_key = _resolve_scale(request.args.get("scale"))
-    data, chart_data = _load_player_detail(player_tag, scale_key)
-    return render_template("player.html", data=data, chart_data=chart_data)
+    payload = _load_overview(scale_key)
+    return jsonify(_serialize_json(payload)), 200
+
+
+@app.get("/api/player/<player_tag>")
+def api_player(player_tag: str) -> tuple[Any, int]:
+    scale_key = _resolve_scale(request.args.get("scale"))
+    payload = _load_player_detail(player_tag, scale_key)
+    return jsonify(_serialize_json(payload)), 200
 
 
 @app.get("/health")
@@ -904,7 +1139,7 @@ def health() -> tuple[dict[str, str], int]:
 
 
 def main() -> int:
-    port = int(os.getenv("PORT", "8120"))
+    port = int(os.getenv("PORT", "8121"))
     serve(app, host="0.0.0.0", port=port)
     return 0
 

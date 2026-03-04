@@ -1,22 +1,28 @@
 # Clash of Clans Storage (Clan + Joueurs)
 
-Stack Docker avec:
+Stack Docker:
 - `db`: PostgreSQL
-- `cron`: job périodique qui fetch l'API Clash of Clans et stocke clan/joueurs/guerres/capitale
-- `dashboard`: interface web **liquid design** pour piloter la santé globale du clan et le détail joueur
-
-Le schéma SQL est défini dans `db/init.sql`.
+- `cron`: fetch API Clash of Clans + stockage DB (horaire)
+- `dashboard-api`: API Python (lit la DB, calcule les stats)
+- `dashboard`: front **React Native Web** (design liquid) sur `http://localhost:8120`
 
 ## Configuration
 
 1. Copier `.env.example` vers `.env` puis renseigner `API_KEY`.
-2. Adapter `config/config.yml`:
-   - `clan_id` (obligatoire, aucune valeur par défaut)
-   - `fetch_cron` (par défaut: `0 * * * *`, soit 1 fois par heure)
-   - `db_url` (par défaut vers la DB Docker)
+2. Renseigner `config/config.yml`:
+   - `clan_id` obligatoire (pas de valeur par défaut)
+   - `fetch_cron` (par défaut: `0 * * * *`)
+   - `db_url` (par défaut: DB Docker)
 
 Exemple:
-- Clan: `#2PVYQ00R` (Team Barbare)
+
+```yaml
+clan_id: "#2PVYQ00R"
+fetch_cron: "0 * * * *"
+db_url: "postgresql://coc:coc@db:5432/coc"
+api_base_url: "https://api.clashofclans.com/v1"
+request_timeout_seconds: 20
+```
 
 ## Lancement
 
@@ -24,50 +30,51 @@ Exemple:
 docker compose up --build -d
 ```
 
-## Logs
+## Accès
+
+- Dashboard (React Native Web): `http://localhost:8120`
+- API dashboard:
+  - `http://localhost:8120/health` (proxy vers API)
+  - `http://localhost:8120/api/overview?scale=30d`
+  - `http://localhost:8120/api/player/2PRJVLY29?scale=30d`
+
+## Logs utiles
 
 ```bash
 docker compose logs -f cron
+docker compose logs -f dashboard-api
 docker compose logs -f dashboard
 ```
 
-## Dashboard
+## Règles métier importantes
 
-- URL: `http://localhost:8120`
-- Design: liquid UI (desktop + mobile)
-- Echelles d'analyse: `7d`, `30d`, `90d`, `365d`, `all`
-- Drill-down joueur: clic sur un joueur depuis la table principale
+- `missed_attacks` est compté **uniquement quand la guerre est terminée** (`warEnded`).
+- Distinction explicite des guerres:
+  - `war_type=regular` => **GDC**
+  - `war_type=cwl` => **LDC**
+- Les stats multi-périodes viennent uniquement de la DB (snapshots + historiques), pas d'un calcul direct live API.
 
-## Important: comment on a de l'historique si l'API est temps réel
+## Schéma DB
 
-L'API Clash of Clans expose surtout l'état courant.
-L'historique est reconstruit par le `cron` qui prend des snapshots réguliers en DB (`clan_snapshots`, `player_snapshots`, `clan_wars`, `capital_raid_seasons`, etc.).
-Toutes les stats multi-périodes du dashboard sont calculées **uniquement depuis la DB**.
+Documentation lisible du schéma:
+- `docs/db-schema.md`
 
-## Données stockées pour le pilotage de clan
+Schéma SQL source:
+- `db/init.sql`
 
-- `Dons`: `players.donations`, `players.donations_received` + historique `player_snapshots`
-- `GDC / CWL`:
-  - guerres: `clan_wars`
-  - perf membres: `war_member_performances`
-  - détails attaques: `war_attacks`
-  - groupe CWL + roster: `cwl_groups`, `cwl_group_clans`, `cwl_group_members`
-- `Ligue joueur`: `players.league_tier_name`, `players.builder_base_league_name`
-- `Jeux de clans (cumulé)`: `players.clan_games_points_total` (achievement `Games Champion`)
-- `Capitale`:
-  - weekends: `capital_raid_seasons`
-  - perf joueurs weekend: `capital_raid_member_stats`
-  - cumul joueur global: `players.clan_capital_contributions`
+## Données stockées pour pilotage chef de clan
 
-## Vues utiles
+- Dons joueurs
+- Participation GDC/LDC
+- Ligue
+- Clan Games (cumulé)
+- Capitale (saisons + détail joueur)
 
-- `v_current_clan_members`
-- `v_war_participation_30d`
-- `v_latest_capital_raid_member_stats`
+Tout est historisé pour analyser plusieurs échelles de temps: `7d`, `30d`, `90d`, `365d`, `all`.
 
 ## Notes migration
 
-Si ta DB existait déjà avec l'ancien schéma, recrée le volume pour rejouer le SQL complet:
+Si la base existait déjà et que tu veux repartir proprement:
 
 ```bash
 docker compose down -v

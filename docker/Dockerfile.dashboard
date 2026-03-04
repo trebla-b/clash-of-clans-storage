@@ -11,8 +11,8 @@ COPY app /app/app
 COPY dashboard /app/dashboard
 
 ENV APP_CONFIG=/app/config/config.yml
-ENV PORT=8120
+ENV PORT=8121
 
-EXPOSE 8120
+EXPOSE 8121
 
 CMD ["python", "-m", "dashboard.server"]

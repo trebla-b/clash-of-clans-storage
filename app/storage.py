@@ -580,6 +580,7 @@ def upsert_war_members(conn: psycopg.Connection, war_id: str, war: dict, clan_ta
     team_size = _safe_int(war.get("teamSize"), 0)
     attacks_per_member = _safe_int(war.get("attacksPerMember"), 2)
     attack_capacity = attacks_per_member if attacks_per_member > 0 else 2
+    war_ended = str(war.get("state") or "") == "warEnded"
 
     with conn.cursor() as cur:
         cur.execute("DELETE FROM war_member_performances WHERE war_id = %s", (war_id,))
@@ -670,7 +671,7 @@ def upsert_war_members(conn: psycopg.Connection, war_id: str, war: dict, clan_ta
                         "opponent_attacks": member.get("opponentAttacks"),
                         "best_opponent_stars": best_opp.get("stars"),
                         "best_opponent_destruction": best_opp.get("destructionPercentage"),
-                        "missed_attacks": max(attack_capacity - attacks_used, 0),
+                        "missed_attacks": max(attack_capacity - attacks_used, 0) if war_ended else 0,
                         "is_our_clan": is_our_clan,
                         "raw_json": Json(member),
                     },

@@ -1,4 +1,5 @@
 # Obligatoire (ex: "#2PVYQ00R")
+# Aucune valeur par défaut n'est définie volontairement.
 clan_id: ""
 
 # Format cron standard: minute heure jour-du-mois mois jour-semaine

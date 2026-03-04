@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY frontend/package.json /app/package.json
+RUN npm install
+
+COPY frontend /app
+
+ENV HOST=0.0.0.0
+ENV PORT=8120
+
+EXPOSE 8120
+
+CMD ["npm", "run", "dev"]

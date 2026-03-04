@@ -33,7 +33,7 @@ services:
     volumes:
       - ./config:/app/config:ro
 
-  dashboard:
+  dashboard-api:
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard
@@ -43,12 +43,22 @@ services:
         condition: service_healthy
     environment:
       APP_CONFIG: /app/config/config.yml
-      PORT: 8120
+      PORT: 8121
       TZ: Europe/Paris
-    ports:
-      - "8120:8120"
     volumes:
       - ./config:/app/config:ro
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      - dashboard-api
+    ports:
+      - "8120:8120"
+    environment:
+      TZ: Europe/Paris
 
 volumes:
   db_data:
