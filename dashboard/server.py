@@ -153,7 +153,7 @@ def _compute_player_activity_score(
     jdc: int,
     missed_attacks: int,
 ) -> float:
-    return round((attack_stars * 500.0) + donations + (raid_loot / 5.0) + jdc - missed_attacks, 1)
+    return round((attack_stars * 500.0) + donations + (raid_loot / 5.0) + jdc - (missed_attacks * 1000.0), 1)
 
 
 def _dt_label(value: datetime | None, bucket: str) -> str:
