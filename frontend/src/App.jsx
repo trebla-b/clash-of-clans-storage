@@ -610,10 +610,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
 
       <Panel title="Fraîcheur DB">
         <View style={styles.metricsGrid}>
-          <Metric label="Snapshots clan" value={fmtDate(data?.freshness?.latest_snapshot)} />
-          <Metric label="Wars" value={fmtDate(data?.freshness?.latest_war)} />
-          <Metric label="Capitale" value={fmtDate(data?.freshness?.latest_capital)} />
-          <Metric label="Players" value={fmtDate(data?.freshness?.latest_players)} />
+          <Metric label="Dernier fetch" value={fmtDate(data?.freshness?.latest_snapshot)} />
         </View>
       </Panel>
     </>
