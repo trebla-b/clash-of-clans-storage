@@ -1,6 +1,6 @@
 # Obligatoire (ex: "#2PVYQ00R")
 # Aucune valeur par défaut n'est définie volontairement.
-clan_id: ""
+clan_id: "#2PVYQ00R"
 
 # Format cron standard: minute heure jour-du-mois mois jour-semaine
 fetch_cron: "0 * * * *"
