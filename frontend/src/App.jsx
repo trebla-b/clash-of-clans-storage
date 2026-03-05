@@ -47,6 +47,11 @@ const shortDateFmt = new Intl.DateTimeFormat("fr-FR", {
   hour: "2-digit",
   minute: "2-digit",
 });
+const longDateFmt = new Intl.DateTimeFormat("fr-FR", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
 
 const WAR_FAMILY_LABEL = {
   overall: "Global",
@@ -138,6 +143,17 @@ function fmtDate(value) {
     return "-";
   }
   return shortDateFmt.format(date);
+}
+
+function fmtDateOnly(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return longDateFmt.format(date);
 }
 
 function buildClanPointsChart(points) {
@@ -478,7 +494,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
   return (
     <>
       <View style={styles.hero}>
-        <Text style={styles.heroEyebrow}>Liquid Clan Command</Text>
+        <Text style={styles.heroEyebrow}>Site inauguré le {fmtDateOnly(data?.freshness?.first_snapshot)}</Text>
         <Text style={styles.heroTitle}>{clan.name || "Clan"}</Text>
         <Text style={styles.heroSubtitle}>
           {clan.tag || "-"} · Niveau {fmtInt(clan.clan_level)} · {fmtInt(kpis.active_members)} membres actifs
@@ -521,7 +537,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
       </View>
 
       <View style={styles.panelRow}>
-        <Panel title="Evolution points clan" subtitle="DB: clan_snapshots (delta entre snapshots)" wide>
+        <Panel title="Evolution points clan" subtitle="delta entre snapshots" wide>
           <View style={styles.chartWrap}>
             <Line data={pointsChart} options={chartOptions({ dualAxis: true })} />
           </View>
@@ -534,7 +550,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
       </View>
 
       <View style={styles.panelRow}>
-        <Panel title="Résultats guerres GDC vs LDC" subtitle="DB: clan_wars" wide>
+        <Panel title="Résultats guerres GDC vs LDC" subtitle="comparaison des issues" wide>
           <View style={styles.chartWrap}>
             <Bar data={warChart} options={chartOptions({ stacked: true })} />
           </View>
@@ -546,30 +562,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
         </Panel>
       </View>
 
-      <Panel title="Signal risque" subtitle="joueurs avec attaques oubliées + faible score">
-        {(data?.at_risk || []).length === 0 ? (
-          <Text style={styles.emptyText}>Aucune donnée.</Text>
-        ) : (
-          <View style={styles.listWrap}>
-            {(data?.at_risk || []).map((player) => (
-              <View key={player.player_tag} style={styles.listRow}>
-                <View>
-                  <Text style={styles.rowTitle}>{player.name}</Text>
-                  <Text style={styles.rowHint}>
-                    {player.player_tag} · TH{fmtInt(player.town_hall_level)}
-                  </Text>
-                </View>
-                <View style={styles.rowRight}>
-                  <Text style={styles.rowDanger}>{fmtInt(player.overall?.missed_attacks)} oubliées</Text>
-                  <Text style={styles.rowHint}>{fmtInt(player.health_score)}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-      </Panel>
-
-      <Panel title="Détail participation joueurs" subtitle="drill-down multi-échelle basé DB">
+      <Panel title="Détail participation joueurs">
         {players.length === 0 ? (
           <Text style={styles.emptyText}>Aucun membre actif trouvé.</Text>
         ) : (
@@ -615,7 +608,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
         )}
       </Panel>
 
-      <Panel title="Fraîcheur DB" subtitle="preuves de calcul basé base de données">
+      <Panel title="Fraîcheur DB">
         <View style={styles.metricsGrid}>
           <Metric label="Snapshots clan" value={fmtDate(data?.freshness?.latest_snapshot)} />
           <Metric label="Wars" value={fmtDate(data?.freshness?.latest_war)} />
@@ -705,7 +698,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
       </View>
 
       <View style={styles.panelRow}>
-        <Panel title="Timeline trophées" subtitle="DB: player_snapshots" wide>
+        <Panel title="Timeline trophées" subtitle="historique des snapshots" wide>
           <View style={styles.chartWrap}>
             <Line data={snapshotChart} options={chartOptions()} />
           </View>

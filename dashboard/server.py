@@ -770,12 +770,13 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 cur,
                 """
                 SELECT
+                    (SELECT MIN(fetched_at) FROM clan_snapshots WHERE clan_tag = %s) AS first_snapshot,
                     (SELECT MAX(fetched_at) FROM clan_snapshots WHERE clan_tag = %s) AS latest_snapshot,
                     (SELECT MAX(updated_at) FROM clan_wars WHERE clan_tag = %s) AS latest_war,
                     (SELECT MAX(updated_at) FROM capital_raid_seasons WHERE clan_tag = %s) AS latest_capital,
                     (SELECT MAX(updated_at) FROM players WHERE clan_tag = %s) AS latest_players
                 """,
-                (clan_tag, clan_tag, clan_tag, clan_tag),
+                (clan_tag, clan_tag, clan_tag, clan_tag, clan_tag),
             )
 
     latest_snapshot = freshness.get("latest_snapshot")
