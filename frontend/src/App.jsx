@@ -141,12 +141,15 @@ function fmtDate(value) {
 }
 
 function buildClanPointsChart(points) {
+  const clanPoints = points.map((item) => Number(item?.clan_points || 0));
+  const clanPointDeltas = clanPoints.map((value, index) => (index === 0 ? 0 : value - clanPoints[index - 1]));
+
   return {
     labels: points.map((item) => item.label),
     datasets: [
       {
-        label: "Points clan",
-        data: points.map((item) => item.clan_points),
+        label: "Delta points clan",
+        data: clanPointDeltas,
         borderColor: "#09a7b6",
         backgroundColor: "rgba(9, 167, 182, 0.18)",
         fill: true,
@@ -518,7 +521,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
       </View>
 
       <View style={styles.panelRow}>
-        <Panel title="Evolution points clan" subtitle="DB: clan_snapshots" wide>
+        <Panel title="Evolution points clan" subtitle="DB: clan_snapshots (delta entre snapshots)" wide>
           <View style={styles.chartWrap}>
             <Line data={pointsChart} options={chartOptions({ dualAxis: true })} />
           </View>
