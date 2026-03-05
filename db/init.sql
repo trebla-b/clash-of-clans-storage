@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS players (
     previous_league_group_tag TEXT,
     previous_league_season_id BIGINT,
     clan_games_points_total INTEGER,
+    looted_resources_total BIGINT,
     raw_json JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -71,6 +72,7 @@ ALTER TABLE players ADD COLUMN IF NOT EXISTS current_league_season_id BIGINT;
 ALTER TABLE players ADD COLUMN IF NOT EXISTS previous_league_group_tag TEXT;
 ALTER TABLE players ADD COLUMN IF NOT EXISTS previous_league_season_id BIGINT;
 ALTER TABLE players ADD COLUMN IF NOT EXISTS clan_games_points_total INTEGER;
+ALTER TABLE players ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT;
 
 CREATE TABLE IF NOT EXISTS player_snapshots (
     snapshot_id BIGSERIAL PRIMARY KEY,
@@ -86,12 +88,14 @@ CREATE TABLE IF NOT EXISTS player_snapshots (
     league_tier_name TEXT,
     builder_base_league_name TEXT,
     clan_games_points_total INTEGER,
+    looted_resources_total BIGINT,
     raw_json JSONB NOT NULL
 );
 
 ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS league_tier_name TEXT;
 ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS builder_base_league_name TEXT;
 ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS clan_games_points_total INTEGER;
+ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT;
 
 CREATE INDEX IF NOT EXISTS idx_player_snapshots_tag_time
     ON player_snapshots (player_tag, fetched_at DESC);
@@ -275,7 +279,8 @@ SELECT
     p.donations_received,
     p.clan_games_points_total,
     p.clan_capital_contributions,
-    cm.last_seen_at
+    cm.last_seen_at,
+    p.looted_resources_total
 FROM clan_memberships cm
 JOIN players p ON p.tag = cm.player_tag
 WHERE cm.is_active = TRUE;

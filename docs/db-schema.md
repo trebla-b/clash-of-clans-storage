@@ -36,7 +36,7 @@ Ce document décrit la structure de la base PostgreSQL utilisée par `cron` pour
 ### `players`
 - PK: `tag`
 - FK: `clan_tag` (nullable)
-- Colonnes métier: rôle, TH, trophées, dons, ligue, capitale, `clan_games_points_total`
+- Colonnes métier: rôle, TH, trophées, dons, ligue, capitale, `clan_games_points_total`, `looted_resources_total`
 - Technique: `raw_json`, `updated_at`
 
 ### `clan_memberships`
@@ -56,7 +56,7 @@ Ce document décrit la structure de la base PostgreSQL utilisée par `cron` pour
 - PK: `snapshot_id`
 - FK: `player_tag`
 - Timestamp: `fetched_at`
-- Mesures: `trophies`, `donations`, `donations_received`, `clan_games_points_total`, `clan_capital_contributions`
+- Mesures: `trophies`, `donations`, `donations_received`, `clan_games_points_total`, `looted_resources_total`, `clan_capital_contributions`
 
 ## 3) Guerres (GDC + LDC)
 
@@ -118,8 +118,10 @@ Ce document décrit la structure de la base PostgreSQL utilisée par `cron` pour
 ## Colonnes clés pour décisions de chef
 
 - Dons: `players.donations`, `players.donations_received`, historique `player_snapshots`.
+- Ressources pillées (succès): `players.looted_resources_total`, historique `player_snapshots`.
 - Participation GDC/LDC: `clan_wars.war_type` + `war_member_performances`.
 - Ligue joueur: `players.league_tier_name`.
 - Clan Games (cumulé): `players.clan_games_points_total`.
 - Clan Games (pilotage): delta mensuel calculé depuis `player_snapshots` (max mensuel puis différence mois N vs N-1).
 - Capitale: `capital_raid_seasons` + `capital_raid_member_stats` + cumul `players.clan_capital_contributions`.
+- Dernière activité estimée joueur: max temporel de deltas snapshots (trophées/dons/JDC/capitale/loot), activité guerre et activité raid capitale.

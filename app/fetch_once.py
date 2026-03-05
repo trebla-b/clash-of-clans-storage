@@ -98,6 +98,8 @@ def main() -> int:
     capital_raid_seasons_stored = 0
 
     with storage.connect(config.db_url) as conn:
+        storage.ensure_runtime_schema(conn)
+        conn.commit()
         with conn.transaction():
             storage.upsert_clan(conn, clan)
             storage.insert_clan_snapshot(conn, clan)

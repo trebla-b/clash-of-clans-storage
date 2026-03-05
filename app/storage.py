@@ -7,10 +7,43 @@ import psycopg
 from psycopg.types.json import Json
 
 CLAN_GAMES_ACHIEVEMENT_NAME = "games champion"
+LOOTED_RESOURCE_ACHIEVEMENT_NAMES = {
+    "gold grab",
+    "elixir escapade",
+    "heroic heist",
+}
 
 
 def connect(db_url: str) -> psycopg.Connection:
     return psycopg.connect(db_url)
+
+
+def ensure_runtime_schema(conn: psycopg.Connection) -> None:
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT")
+        cur.execute("ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT")
+        cur.execute(
+            """
+            CREATE OR REPLACE VIEW v_current_clan_members AS
+            SELECT
+                cm.clan_tag,
+                cm.player_tag,
+                p.name,
+                p.trophies,
+                p.town_hall_level,
+                p.league_tier_name,
+                p.builder_base_league_name,
+                p.donations,
+                p.donations_received,
+                p.clan_games_points_total,
+                p.clan_capital_contributions,
+                cm.last_seen_at,
+                p.looted_resources_total
+            FROM clan_memberships cm
+            JOIN players p ON p.tag = cm.player_tag
+            WHERE cm.is_active = TRUE
+            """
+        )
 
 
 def parse_coc_time(value: str | None) -> datetime | None:
@@ -36,6 +69,24 @@ def extract_clan_games_points(player: dict) -> int | None:
             except (TypeError, ValueError):
                 return None
     return None
+
+
+def extract_looted_resources_total(player: dict) -> int | None:
+    achievements = player.get("achievements") or []
+    total = 0
+    found = False
+    for achievement in achievements:
+        name = str(achievement.get("name") or "").strip().lower()
+        if name not in LOOTED_RESOURCE_ACHIEVEMENT_NAMES:
+            continue
+        found = True
+        try:
+            total += int(achievement.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+    if not found:
+        return None
+    return total
 
 
 def extract_league_tier(player: dict) -> dict:
@@ -212,6 +263,7 @@ def upsert_player(conn: psycopg.Connection, player: dict) -> None:
     league_tier = extract_league_tier(player)
     builder_base_league = player.get("builderBaseLeague") or {}
     clan_games_points_total = extract_clan_games_points(player)
+    looted_resources_total = extract_looted_resources_total(player)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -244,6 +296,7 @@ def upsert_player(conn: psycopg.Connection, player: dict) -> None:
                 previous_league_group_tag,
                 previous_league_season_id,
                 clan_games_points_total,
+                looted_resources_total,
                 raw_json,
                 updated_at
             )
@@ -275,6 +328,7 @@ def upsert_player(conn: psycopg.Connection, player: dict) -> None:
                 %(previousLeagueGroupTag)s,
                 %(previousLeagueSeasonId)s,
                 %(clan_games_points_total)s,
+                %(looted_resources_total)s,
                 %(raw_json)s,
                 NOW()
             )
@@ -306,6 +360,7 @@ def upsert_player(conn: psycopg.Connection, player: dict) -> None:
                 previous_league_group_tag = EXCLUDED.previous_league_group_tag,
                 previous_league_season_id = EXCLUDED.previous_league_season_id,
                 clan_games_points_total = EXCLUDED.clan_games_points_total,
+                looted_resources_total = EXCLUDED.looted_resources_total,
                 raw_json = EXCLUDED.raw_json,
                 updated_at = NOW()
             """,
@@ -337,6 +392,7 @@ def upsert_player(conn: psycopg.Connection, player: dict) -> None:
                 "previousLeagueGroupTag": player.get("previousLeagueGroupTag"),
                 "previousLeagueSeasonId": player.get("previousLeagueSeasonId"),
                 "clan_games_points_total": clan_games_points_total,
+                "looted_resources_total": looted_resources_total,
                 "raw_json": Json(player),
             },
         )
@@ -347,6 +403,7 @@ def insert_player_snapshot(conn: psycopg.Connection, player: dict) -> None:
     league_tier = extract_league_tier(player)
     builder_base_league = player.get("builderBaseLeague") or {}
     clan_games_points_total = extract_clan_games_points(player)
+    looted_resources_total = extract_looted_resources_total(player)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -363,9 +420,10 @@ def insert_player_snapshot(conn: psycopg.Connection, player: dict) -> None:
                 league_tier_name,
                 builder_base_league_name,
                 clan_games_points_total,
+                looted_resources_total,
                 raw_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 player.get("tag"),
@@ -379,6 +437,7 @@ def insert_player_snapshot(conn: psycopg.Connection, player: dict) -> None:
                 league_tier.get("name"),
                 builder_base_league.get("name"),
                 clan_games_points_total,
+                looted_resources_total,
                 Json(player),
             ),
         )

@@ -101,6 +101,14 @@ const PLAYER_SORTS = {
     defaultDirection: "desc",
     value: (player) => Number(player?.ldc?.missed_attacks || 0),
   },
+  last_activity: {
+    label: "Dernière activité",
+    defaultDirection: "desc",
+    value: (player) => {
+      const parsed = Date.parse(String(player?.estimated_last_activity_at || ""));
+      return Number.isNaN(parsed) ? 0 : parsed;
+    },
+  },
   health_score: {
     label: "Score",
     defaultDirection: "desc",
@@ -601,6 +609,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
                 <Text style={styles.tableCell}>{fmtInt(player.clan_games_monthly_delta)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.gdc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.ldc?.missed_attacks)} miss</Text>
+                <Text style={styles.tableCell}>{fmtDate(player.estimated_last_activity_at)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.health_score)}</Text>
               </Pressable>
             ))}
@@ -641,6 +650,10 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
     () => buildPlayerClanGamesMonthlyChart(clanGamesMonthlySeries),
     [clanGamesMonthlySeries],
   );
+  const lastActivityHint =
+    Number(summary?.last_activity_hours || 0) >= 9999
+      ? undefined
+      : `${Number(summary?.last_activity_hours || 0).toFixed(1)} h`;
 
   return (
     <>
@@ -660,6 +673,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
 
       <View style={styles.metricsGrid}>
         <Metric label="Score joueur" value={fmtInt(summary.player_health)} hint={`fraîcheur ${fmtInt(summary.freshness_hours)} h`} />
+        <Metric label="Dernière activité estimée" value={fmtDate(summary.last_activity_at)} hint={lastActivityHint} />
         <Metric label="Trophées" value={fmtInt(player.trophies)} hint={`best ${fmtInt(player.best_trophies)}`} />
         <Metric label="Dons" value={fmtInt(player.donations)} hint={`reçus ${fmtInt(player.donations_received)}`} />
         <Metric

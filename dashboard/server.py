@@ -10,6 +10,7 @@ from psycopg.rows import dict_row
 from waitress import serve
 
 from app.config import DEFAULT_DB_URL, load_config
+from app import storage as app_storage
 
 try:
     CONFIG = load_config()
@@ -34,10 +35,21 @@ WAR_TYPE_MAP = {
 }
 
 app = Flask(__name__)
+_SCHEMA_READY = False
 
 
 def _connect() -> psycopg.Connection:
     return psycopg.connect(DB_URL, row_factory=dict_row)
+
+
+def _ensure_runtime_schema() -> None:
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    with _connect() as conn:
+        app_storage.ensure_runtime_schema(conn)
+        conn.commit()
+    _SCHEMA_READY = True
 
 
 def _one(cur: psycopg.Cursor, query: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
@@ -194,6 +206,13 @@ def _compute_participation_rate(attacks_used: int, attack_capacity: int) -> floa
     return round((attacks_used / attack_capacity) * 100.0, 1)
 
 
+def _max_datetime(*values: Any) -> datetime | None:
+    datetimes = [value for value in values if isinstance(value, datetime)]
+    if not datetimes:
+        return None
+    return max(datetimes)
+
+
 def _serialize_json(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -205,6 +224,7 @@ def _serialize_json(value: Any) -> Any:
 
 
 def _load_overview(scale_key: str) -> dict[str, Any]:
+    _ensure_runtime_schema()
     from_time = _from_time(scale_key)
     scale_conf = SCALES[scale_key]
 
@@ -583,6 +603,132 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 previous_total = _safe_int(previous_total_raw, current_total) if previous_total_raw is not None else current_total
                 clan_games_delta_by_player[str(player_tag)] = max(current_total - previous_total, 0)
 
+            snapshot_activity_rows = _all(
+                cur,
+                """
+                WITH deltas AS (
+                    SELECT
+                        player_tag,
+                        fetched_at,
+                        GREATEST(
+                            COALESCE(trophies, 0)
+                                - COALESCE(LAG(trophies) OVER (PARTITION BY player_tag ORDER BY fetched_at), COALESCE(trophies, 0)),
+                            0
+                        )::BIGINT AS trophies_delta,
+                        GREATEST(
+                            COALESCE(war_stars, 0)
+                                - COALESCE(LAG(war_stars) OVER (PARTITION BY player_tag ORDER BY fetched_at), COALESCE(war_stars, 0)),
+                            0
+                        )::BIGINT AS war_stars_delta,
+                        GREATEST(
+                            COALESCE(donations, 0)
+                                - COALESCE(LAG(donations) OVER (PARTITION BY player_tag ORDER BY fetched_at), COALESCE(donations, 0)),
+                            0
+                        )::BIGINT AS donations_delta,
+                        GREATEST(
+                            COALESCE(donations_received, 0)
+                                - COALESCE(
+                                    LAG(donations_received) OVER (PARTITION BY player_tag ORDER BY fetched_at),
+                                    COALESCE(donations_received, 0)
+                                ),
+                            0
+                        )::BIGINT AS donations_received_delta,
+                        GREATEST(
+                            COALESCE(clan_games_points_total, 0)
+                                - COALESCE(
+                                    LAG(clan_games_points_total) OVER (PARTITION BY player_tag ORDER BY fetched_at),
+                                    COALESCE(clan_games_points_total, 0)
+                                ),
+                            0
+                        )::BIGINT AS clan_games_delta,
+                        GREATEST(
+                            COALESCE(clan_capital_contributions, 0)
+                                - COALESCE(
+                                    LAG(clan_capital_contributions) OVER (PARTITION BY player_tag ORDER BY fetched_at),
+                                    COALESCE(clan_capital_contributions, 0)
+                                ),
+                            0
+                        )::BIGINT AS capital_delta,
+                        GREATEST(
+                            COALESCE(looted_resources_total, 0)
+                                - COALESCE(
+                                    LAG(looted_resources_total) OVER (PARTITION BY player_tag ORDER BY fetched_at),
+                                    COALESCE(looted_resources_total, 0)
+                                ),
+                            0
+                        )::BIGINT AS looted_resources_delta
+                    FROM player_snapshots
+                    WHERE clan_tag = %s
+                )
+                SELECT player_tag, MAX(fetched_at) AS last_snapshot_activity_at
+                FROM deltas
+                WHERE
+                    trophies_delta > 0
+                    OR war_stars_delta > 0
+                    OR donations_delta > 0
+                    OR donations_received_delta > 0
+                    OR clan_games_delta > 0
+                    OR capital_delta > 0
+                    OR looted_resources_delta > 0
+                GROUP BY player_tag
+                """,
+                (clan_tag,),
+            )
+            snapshot_activity_by_tag = {
+                str(row.get("player_tag")): row.get("last_snapshot_activity_at")
+                for row in snapshot_activity_rows
+                if row.get("player_tag")
+            }
+
+            war_activity_rows = _all(
+                cur,
+                """
+                SELECT
+                    wmp.player_tag,
+                    MAX(COALESCE(w.end_time, w.start_time, w.updated_at)) AS last_war_activity_at
+                FROM war_member_performances wmp
+                JOIN clan_wars w ON w.war_id = wmp.war_id
+                WHERE w.clan_tag = %s
+                  AND wmp.is_our_clan = TRUE
+                  AND (
+                    COALESCE(wmp.attacks_used, 0) > 0
+                    OR COALESCE(wmp.total_attack_stars, 0) > 0
+                  )
+                GROUP BY wmp.player_tag
+                """,
+                (clan_tag,),
+            )
+            war_activity_by_tag = {
+                str(row.get("player_tag")): row.get("last_war_activity_at")
+                for row in war_activity_rows
+                if row.get("player_tag")
+            }
+
+            capital_activity_rows = _all(
+                cur,
+                """
+                SELECT
+                    m.player_tag,
+                    MAX(COALESCE(s.season_end_time, s.season_start_time, s.updated_at)) AS last_capital_activity_at
+                FROM capital_raid_member_stats m
+                JOIN capital_raid_seasons s
+                  ON s.clan_tag = m.clan_tag
+                 AND s.season_start_time = m.season_start_time
+                WHERE m.clan_tag = %s
+                  AND (
+                    COALESCE(m.attacks, 0) > 0
+                    OR COALESCE(m.capital_resources_looted, 0) > 0
+                  )
+                GROUP BY m.player_tag
+                """,
+                (clan_tag,),
+            )
+            capital_activity_by_tag = {
+                str(row.get("player_tag")): row.get("last_capital_activity_at")
+                for row in capital_activity_rows
+                if row.get("player_tag")
+            }
+
             player_rows = _all(
                 cur,
                 f"""
@@ -669,6 +815,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     m.donations,
                     m.donations_received,
                     m.clan_games_points_total,
+                    m.looted_resources_total,
                     m.clan_capital_contributions,
                     COALESCE(w.attack_capacity, 0)::INT AS attack_capacity,
                     COALESCE(w.attacks_used, 0)::INT AS attacks_used,
@@ -717,6 +864,22 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     player_raid_loot = _safe_int(player_cap_entry.get("capital_resources_looted"))
                 row["latest_raid_loot"] = player_raid_loot
                 row["clan_games_monthly_delta"] = clan_games_delta_by_player.get(player_tag, 0)
+                row["looted_resources_total"] = _safe_int(row.get("looted_resources_total"))
+
+                estimated_last_activity_at = _max_datetime(
+                    row.get("last_snapshot_at"),
+                    snapshot_activity_by_tag.get(player_tag),
+                    war_activity_by_tag.get(player_tag),
+                    capital_activity_by_tag.get(player_tag),
+                )
+                row["estimated_last_activity_at"] = estimated_last_activity_at
+                if isinstance(estimated_last_activity_at, datetime):
+                    row["last_activity_hours"] = round(
+                        max((now_utc - estimated_last_activity_at).total_seconds() / 3600.0, 0.0),
+                        1,
+                    )
+                else:
+                    row["last_activity_hours"] = 9999.0
 
                 row["overall"] = {
                     "attack_capacity": overall_capacity,
@@ -904,6 +1067,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
 
 
 def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
+    _ensure_runtime_schema()
     tag = _normalize_tag(player_tag)
     scale_conf = SCALES[scale_key]
     from_time = _from_time(scale_key)
@@ -925,6 +1089,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                     donations,
                     donations_received,
                     clan_games_points_total,
+                    looted_resources_total,
                     clan_capital_contributions,
                     updated_at
                 FROM players
@@ -953,6 +1118,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                     MAX(donations)::INT AS donations,
                     MAX(donations_received)::INT AS donations_received,
                     MAX(clan_games_points_total)::INT AS clan_games_points_total,
+                    MAX(looted_resources_total)::BIGINT AS looted_resources_total,
                     MAX(clan_capital_contributions)::INT AS clan_capital_contributions
                 FROM player_snapshots
                 WHERE player_tag = %s
@@ -966,10 +1132,16 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
             last_values = {
                 "donations": None,
                 "clan_games_points_total": None,
+                "looted_resources_total": None,
                 "clan_capital_contributions": None,
             }
             for row in snapshots:
-                for metric in ("donations", "clan_games_points_total", "clan_capital_contributions"):
+                for metric in (
+                    "donations",
+                    "clan_games_points_total",
+                    "looted_resources_total",
+                    "clan_capital_contributions",
+                ):
                     current = _safe_int(row.get(metric))
                     previous = last_values[metric]
                     delta = 0
@@ -1194,12 +1366,115 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 (tag,),
             )
 
+            snapshot_activity = _one(
+                cur,
+                """
+                WITH deltas AS (
+                    SELECT
+                        fetched_at,
+                        GREATEST(COALESCE(trophies, 0) - COALESCE(LAG(trophies) OVER (ORDER BY fetched_at), COALESCE(trophies, 0)), 0)
+                            AS trophies_delta,
+                        GREATEST(COALESCE(war_stars, 0) - COALESCE(LAG(war_stars) OVER (ORDER BY fetched_at), COALESCE(war_stars, 0)), 0)
+                            AS war_stars_delta,
+                        GREATEST(COALESCE(donations, 0) - COALESCE(LAG(donations) OVER (ORDER BY fetched_at), COALESCE(donations, 0)), 0)
+                            AS donations_delta,
+                        GREATEST(
+                            COALESCE(donations_received, 0)
+                                - COALESCE(LAG(donations_received) OVER (ORDER BY fetched_at), COALESCE(donations_received, 0)),
+                            0
+                        ) AS donations_received_delta,
+                        GREATEST(
+                            COALESCE(clan_games_points_total, 0)
+                                - COALESCE(LAG(clan_games_points_total) OVER (ORDER BY fetched_at), COALESCE(clan_games_points_total, 0)),
+                            0
+                        ) AS clan_games_delta,
+                        GREATEST(
+                            COALESCE(clan_capital_contributions, 0)
+                                - COALESCE(
+                                    LAG(clan_capital_contributions) OVER (ORDER BY fetched_at),
+                                    COALESCE(clan_capital_contributions, 0)
+                                ),
+                            0
+                        ) AS capital_delta,
+                        GREATEST(
+                            COALESCE(looted_resources_total, 0)
+                                - COALESCE(
+                                    LAG(looted_resources_total) OVER (ORDER BY fetched_at),
+                                    COALESCE(looted_resources_total, 0)
+                                ),
+                            0
+                        ) AS looted_resources_delta
+                    FROM player_snapshots
+                    WHERE player_tag = %s
+                )
+                SELECT MAX(fetched_at) AS last_snapshot_activity_at
+                FROM deltas
+                WHERE
+                    trophies_delta > 0
+                    OR war_stars_delta > 0
+                    OR donations_delta > 0
+                    OR donations_received_delta > 0
+                    OR clan_games_delta > 0
+                    OR capital_delta > 0
+                    OR looted_resources_delta > 0
+                """,
+                (tag,),
+            )
+
+            war_activity = _one(
+                cur,
+                """
+                SELECT MAX(COALESCE(w.end_time, w.start_time, w.updated_at)) AS last_war_activity_at
+                FROM war_member_performances wmp
+                JOIN clan_wars w ON w.war_id = wmp.war_id
+                WHERE wmp.player_tag = %s
+                  AND wmp.is_our_clan = TRUE
+                  AND w.clan_tag = %s
+                  AND (
+                    COALESCE(wmp.attacks_used, 0) > 0
+                    OR COALESCE(wmp.total_attack_stars, 0) > 0
+                  )
+                """,
+                (tag, clan_tag),
+            )
+
+            capital_activity = _one(
+                cur,
+                """
+                SELECT MAX(COALESCE(s.season_end_time, s.season_start_time, s.updated_at)) AS last_capital_activity_at
+                FROM capital_raid_member_stats m
+                JOIN capital_raid_seasons s
+                  ON s.clan_tag = m.clan_tag
+                 AND s.season_start_time = m.season_start_time
+                WHERE m.player_tag = %s
+                  AND m.clan_tag = %s
+                  AND (
+                    COALESCE(m.attacks, 0) > 0
+                    OR COALESCE(m.capital_resources_looted, 0) > 0
+                  )
+                """,
+                (tag, clan_tag),
+            )
+
     now_utc = datetime.now(timezone.utc)
     freshness_hours = 9999.0
     if isinstance(player_last_snapshot.get("last_snapshot"), datetime):
         freshness_hours = max(
             (now_utc - player_last_snapshot["last_snapshot"]).total_seconds() / 3600.0,
             0.0,
+        )
+
+    estimated_last_activity_at = _max_datetime(
+        player_last_snapshot.get("last_snapshot"),
+        snapshot_activity.get("last_snapshot_activity_at"),
+        war_activity.get("last_war_activity_at"),
+        capital_activity.get("last_capital_activity_at"),
+    )
+    estimated_last_activity_hours = 9999.0
+    if isinstance(estimated_last_activity_at, datetime):
+        estimated_last_activity_hours = round(
+            max((now_utc - estimated_last_activity_at).total_seconds() / 3600.0, 0.0),
+            1,
         )
 
     latest_cap = capital_history[0] if capital_history else {}
@@ -1320,6 +1595,8 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
             **summary,
             "player_health": player_activity_score,
             "freshness_hours": round(freshness_hours, 1),
+            "last_activity_at": estimated_last_activity_at,
+            "last_activity_hours": estimated_last_activity_hours,
         },
         "histories": {
             "wars": war_history,
