@@ -145,35 +145,15 @@ def _compute_clan_health(
     }
 
 
-def _compute_player_health(
-    attack_capacity: int,
-    missed_attacks: int,
+def _compute_player_activity_score(
+    *,
+    attack_stars: int,
     donations: int,
-    capital_ratio: float,
-    freshness_hours: float,
+    raid_loot: int,
+    jdc: int,
+    missed_attacks: int,
 ) -> float:
-    participation_score = 65.0
-    if attack_capacity > 0:
-        participation_score = max(0.0, min(100.0, (1.0 - (missed_attacks / attack_capacity)) * 100.0))
-
-    donations_score = max(0.0, min(100.0, (donations / 280.0) * 100.0))
-    capital_score = max(0.0, min(100.0, capital_ratio * 100.0)) if capital_ratio > 0 else 60.0
-
-    freshness_score = 25.0
-    if freshness_hours <= 4:
-        freshness_score = 100.0
-    elif freshness_hours <= 12:
-        freshness_score = 75.0
-    elif freshness_hours <= 48:
-        freshness_score = 55.0
-
-    return round(
-        (participation_score * 0.45)
-        + (donations_score * 0.2)
-        + (capital_score * 0.2)
-        + (freshness_score * 0.15),
-        1,
-    )
+    return round((attack_stars * 500.0) + donations + (raid_loot / 5.0) + jdc - missed_attacks, 1)
 
 
 def _dt_label(value: datetime | None, bucket: str) -> str:
@@ -533,10 +513,11 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             )
 
             capital_top: list[dict[str, Any]] = []
+            latest_capital_members_by_tag: dict[str, dict[str, Any]] = {}
             capital_capacity = 0
             capital_used = 0
             if latest_capital:
-                capital_top = _all(
+                capital_members = _all(
                     cur,
                     """
                     SELECT
@@ -549,26 +530,58 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     FROM capital_raid_member_stats
                     WHERE clan_tag = %s
                       AND season_start_time = %s
-                    ORDER BY capital_resources_looted DESC NULLS LAST, attacks DESC
-                    LIMIT 12
                     """,
                     (clan_tag, latest_capital["season_start_time"]),
+                )
+                latest_capital_members_by_tag = {
+                    str(row.get("player_tag")): row for row in capital_members if row.get("player_tag")
+                }
+                capital_top = sorted(
+                    capital_members,
+                    key=lambda row: (
+                        -_safe_int(row.get("capital_resources_looted")),
+                        -_safe_int(row.get("attacks")),
+                    ),
+                )[:12]
+                capital_used = sum(_safe_int(row.get("attacks")) for row in capital_members)
+                capital_capacity = sum(
+                    _safe_int(row.get("attack_limit")) + _safe_int(row.get("bonus_attack_limit"))
+                    for row in capital_members
                 )
 
-                cap_agg = _one(
-                    cur,
-                    """
+            clan_games_player_monthly_rows = _all(
+                cur,
+                """
+                WITH monthly AS (
                     SELECT
-                        COALESCE(SUM(attacks), 0)::INT AS attacks_used,
-                        COALESCE(SUM(attack_limit + bonus_attack_limit), 0)::INT AS attacks_capacity
-                    FROM capital_raid_member_stats
+                        player_tag,
+                        date_trunc('month', fetched_at) AS month_bucket,
+                        MAX(clan_games_points_total)::INT AS month_total
+                    FROM player_snapshots
                     WHERE clan_tag = %s
-                      AND season_start_time = %s
-                    """,
-                    (clan_tag, latest_capital["season_start_time"]),
+                      AND fetched_at >= date_trunc('month', NOW()) - INTERVAL '1 month'
+                    GROUP BY 1, 2
                 )
-                capital_used = _safe_int(cap_agg.get("attacks_used"))
-                capital_capacity = _safe_int(cap_agg.get("attacks_capacity"))
+                SELECT
+                    player_tag,
+                    MAX(month_total) FILTER (WHERE month_bucket = date_trunc('month', NOW()))::INT AS current_month_total,
+                    MAX(month_total) FILTER (
+                        WHERE month_bucket = date_trunc('month', NOW()) - INTERVAL '1 month'
+                    )::INT AS previous_month_total
+                FROM monthly
+                GROUP BY player_tag
+                """,
+                (clan_tag,),
+            )
+            clan_games_delta_by_player: dict[str, int] = {}
+            for row in clan_games_player_monthly_rows:
+                player_tag = row.get("player_tag")
+                if not player_tag:
+                    continue
+                current_total = _safe_int(row.get("current_month_total"), 0)
+                previous_total_raw = row.get("previous_month_total")
+                previous_total = _safe_int(previous_total_raw, current_total) if previous_total_raw is not None else current_total
+                clan_games_delta_by_player[str(player_tag)] = max(current_total - previous_total, 0)
 
             player_rows = _all(
                 cur,
@@ -697,18 +710,13 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 ldc_used = _safe_int(row.get("ldc_attacks_used"))
                 ldc_missed = _safe_int(row.get("ldc_missed_attacks"))
 
-                capital_ratio = 0.0
-                if latest_capital:
-                    player_cap_entry = next(
-                        (p for p in capital_top if p.get("player_tag") == row.get("player_tag")),
-                        None,
-                    )
-                    if player_cap_entry:
-                        cap = _safe_int(player_cap_entry.get("attack_limit")) + _safe_int(
-                            player_cap_entry.get("bonus_attack_limit")
-                        )
-                        if cap > 0:
-                            capital_ratio = _safe_int(player_cap_entry.get("attacks")) / cap
+                player_tag = str(row.get("player_tag") or "")
+                player_cap_entry = latest_capital_members_by_tag.get(player_tag)
+                player_raid_loot = 0
+                if player_cap_entry:
+                    player_raid_loot = _safe_int(player_cap_entry.get("capital_resources_looted"))
+                row["latest_raid_loot"] = player_raid_loot
+                row["clan_games_monthly_delta"] = clan_games_delta_by_player.get(player_tag, 0)
 
                 row["overall"] = {
                     "attack_capacity": overall_capacity,
@@ -731,12 +739,12 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     "participation_rate": _compute_participation_rate(ldc_used, ldc_capacity),
                 }
 
-                row["health_score"] = _compute_player_health(
-                    attack_capacity=overall_capacity,
-                    missed_attacks=overall_missed,
+                row["health_score"] = _compute_player_activity_score(
+                    attack_stars=_safe_int(row.get("overall", {}).get("attack_stars")),
                     donations=_safe_int(row.get("donations")),
-                    capital_ratio=capital_ratio,
-                    freshness_hours=freshness_hours,
+                    raid_loot=_safe_int(row.get("latest_raid_loot")),
+                    jdc=_safe_int(row.get("clan_games_monthly_delta")),
+                    missed_attacks=overall_missed,
                 )
 
                 row["player_slug"] = str(row.get("player_tag") or "").lstrip("#")
@@ -1194,8 +1202,6 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
         )
 
     latest_cap = capital_history[0] if capital_history else {}
-    cap_limit = _safe_int(latest_cap.get("attack_limit")) + _safe_int(latest_cap.get("bonus_attack_limit"))
-    cap_ratio = (_safe_int(latest_cap.get("attacks")) / cap_limit) if cap_limit > 0 else 0.0
 
     summary = {
         "overall": {
@@ -1236,12 +1242,12 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
         summary["ldc"]["attack_capacity"],
     )
 
-    player_health = _compute_player_health(
-        attack_capacity=summary["overall"]["attack_capacity"],
-        missed_attacks=summary["overall"]["missed_attacks"],
+    player_activity_score = _compute_player_activity_score(
+        attack_stars=summary["overall"]["attack_stars"],
         donations=_safe_int(player.get("donations")),
-        capital_ratio=cap_ratio,
-        freshness_hours=freshness_hours,
+        raid_loot=_safe_int(latest_cap.get("capital_resources_looted")),
+        jdc=_safe_int(summary["clan_games_current_month_delta"]),
+        missed_attacks=summary["overall"]["missed_attacks"],
     )
 
     war_history_chrono = list(reversed(war_history))
@@ -1311,7 +1317,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
         "player": player,
         "summary": {
             **summary,
-            "player_health": player_health,
+            "player_health": player_activity_score,
             "freshness_hours": round(freshness_hours, 1),
         },
         "histories": {

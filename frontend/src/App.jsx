@@ -71,10 +71,20 @@ const PLAYER_SORTS = {
     defaultDirection: "desc",
     value: (player) => Number(player?.donations || 0),
   },
-  overall_participation: {
-    label: "Global %",
+  stars: {
+    label: "Etoiles",
     defaultDirection: "desc",
-    value: (player) => Number(player?.overall?.participation_rate || 0),
+    value: (player) => Number(player?.overall?.attack_stars || 0),
+  },
+  raid_loot: {
+    label: "Raid loot",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.latest_raid_loot || 0),
+  },
+  jdc: {
+    label: "JDC",
+    defaultDirection: "desc",
+    value: (player) => Number(player?.clan_games_monthly_delta || 0),
   },
   gdc_missed: {
     label: "GDC miss",
@@ -215,14 +225,6 @@ function buildClanGamesChart(series) {
         data: series.map((item) => item.monthly_delta),
         backgroundColor: "rgba(85, 230, 169, 0.84)",
       },
-      {
-        label: "Total cumulé clan",
-        data: series.map((item) => item.clan_total),
-        borderColor: "#ffc35b",
-        type: "line",
-        yAxisID: "y1",
-        tension: 0.25,
-      },
     ],
   };
 }
@@ -269,14 +271,6 @@ function buildPlayerClanGamesMonthlyChart(series) {
         label: "Delta mensuel",
         data: series.map((item) => item.monthly_delta),
         backgroundColor: "rgba(85, 230, 169, 0.84)",
-      },
-      {
-        label: "Total cumulé joueur",
-        data: series.map((item) => item.month_total),
-        type: "line",
-        borderColor: "#ffc35b",
-        yAxisID: "y1",
-        tension: 0.25,
       },
     ],
   };
@@ -564,7 +558,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
                 </View>
                 <View style={styles.rowRight}>
                   <Text style={styles.rowDanger}>{fmtInt(player.overall?.missed_attacks)} oubliées</Text>
-                  <Text style={styles.rowHint}>{fmtInt(player.health_score)} / 100</Text>
+                  <Text style={styles.rowHint}>{fmtInt(player.health_score)}</Text>
                 </View>
               </View>
             ))}
@@ -606,7 +600,9 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
                 </Text>
                 <Text style={styles.tableCell}>{fmtInt(player.town_hall_level)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.donations)}</Text>
-                <Text style={styles.tableCell}>{fmtPct(player.overall?.participation_rate)}</Text>
+                <Text style={styles.tableCell}>{fmtInt(player.overall?.attack_stars)}</Text>
+                <Text style={styles.tableCell}>{fmtInt(player.latest_raid_loot)}</Text>
+                <Text style={styles.tableCell}>{fmtInt(player.clan_games_monthly_delta)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.gdc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.ldc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.health_score)}</Text>
@@ -670,10 +666,9 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
       </View>
 
       <View style={styles.metricsGrid}>
-        <Metric label="Score joueur" value={`${Number(summary.player_health || 0).toFixed(1)} / 100`} hint={`fraîcheur ${fmtInt(summary.freshness_hours)} h`} />
+        <Metric label="Score joueur" value={fmtInt(summary.player_health)} hint={`fraîcheur ${fmtInt(summary.freshness_hours)} h`} />
         <Metric label="Trophées" value={fmtInt(player.trophies)} hint={`best ${fmtInt(player.best_trophies)}`} />
         <Metric label="Dons" value={fmtInt(player.donations)} hint={`reçus ${fmtInt(player.donations_received)}`} />
-        <Metric label="Clan Games cumulé" value={fmtInt(player.clan_games_points_total)} />
         <Metric
           label="Clan Games Δ mois"
           value={fmtInt(summary.clan_games_current_month_delta)}
