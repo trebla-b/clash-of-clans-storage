@@ -272,7 +272,8 @@ function buildPlayerSnapshotChart(series) {
   };
 }
 
-function buildPlayerDeltaChart(series) {
+function buildPlayerDeltaChart(series, capitalSeries) {
+  const raidLootByLabel = new Map((capitalSeries || []).map((item) => [item.label, Number(item?.loot || 0)]));
   return {
     labels: series.map((item) => item.label),
     datasets: [
@@ -282,8 +283,8 @@ function buildPlayerDeltaChart(series) {
         backgroundColor: "rgba(85, 230, 169, 0.84)",
       },
       {
-        label: "Capitale",
-        data: series.map((item) => item.capital_delta),
+        label: "Raid loot",
+        data: series.map((item) => raidLootByLabel.get(item.label) || 0),
         backgroundColor: "rgba(77, 215, 248, 0.84)",
       },
     ],
@@ -502,7 +503,9 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
   return (
     <>
       <View style={styles.hero}>
-        <Text style={styles.heroEyebrow}>Site inauguré le {fmtDateOnly(data?.freshness?.first_snapshot)}</Text>
+        <Text style={styles.heroEyebrow}>
+          Site inauguré le {fmtDateOnly(data?.freshness?.first_snapshot)} · v{data?.meta?.app_version || "0.0.0"}
+        </Text>
         <Text style={styles.heroTitle}>{clan.name || "Clan"}</Text>
         <Text style={styles.heroSubtitle}>
           {clan.tag || "-"} · Niveau {fmtInt(clan.clan_level)} · {fmtInt(kpis.active_members)} membres actifs
@@ -643,7 +646,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
   const clanGamesMonthlySeries = charts?.clan_games_monthly || [];
 
   const snapshotChart = useMemo(() => buildPlayerSnapshotChart(snapshotSeries), [snapshotSeries]);
-  const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries), [snapshotSeries]);
+  const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries, capitalSeries), [snapshotSeries, capitalSeries]);
   const warChart = useMemo(() => buildPlayerWarChart(warSeries), [warSeries]);
   const capitalChart = useMemo(() => buildPlayerCapitalChart(capitalSeries), [capitalSeries]);
   const clanGamesMonthlyChart = useMemo(
@@ -714,7 +717,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
             <Line data={snapshotChart} options={chartOptions()} />
           </View>
         </Panel>
-        <Panel title="Progression (delta)" subtitle="dons + capitale (snapshots)">
+        <Panel title="Progression (delta)" subtitle="dons (delta) + raid loot">
           <View style={styles.chartWrap}>
             <Bar data={deltaChart} options={chartOptions({ stacked: true })} />
           </View>

@@ -19,6 +19,8 @@ except Exception:  # noqa: BLE001
 
 DB_URL = os.getenv("DASHBOARD_DB_URL") or (CONFIG.db_url if CONFIG else DEFAULT_DB_URL)
 DEFAULT_CLAN_TAG = os.getenv("DASHBOARD_CLAN_TAG") or (CONFIG.clan_id if CONFIG else "")
+APP_VERSION_PATH = os.getenv("APP_VERSION_FILE", "/app/VERSION")
+APP_VERSION_OVERRIDE = os.getenv("APP_VERSION")
 
 SCALES: dict[str, dict[str, Any]] = {
     "7d": {"label": "7 jours", "days": 7, "snapshot_bucket": "hour", "war_bucket": "day"},
@@ -216,6 +218,19 @@ def _serialize_json(value: Any) -> Any:
     return value
 
 
+def _app_version() -> str:
+    if APP_VERSION_OVERRIDE:
+        return APP_VERSION_OVERRIDE.strip()
+    try:
+        with open(APP_VERSION_PATH, "r", encoding="utf-8") as file:
+            version = file.read().strip()
+            if version:
+                return version
+    except OSError:
+        pass
+    return "0.0.0"
+
+
 def _load_overview(scale_key: str) -> dict[str, Any]:
     _ensure_runtime_schema()
     from_time = _from_time(scale_key)
@@ -268,6 +283,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                         "scale": scale_key,
                         "scale_label": scale_conf["label"],
                         "scales": _scale_options(),
+                        "app_version": _app_version(),
                         "generated_at": datetime.now(timezone.utc),
                     },
                     "clan": {"tag": DEFAULT_CLAN_TAG, "name": "Aucune donnée", "members": 0},
@@ -951,6 +967,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             "scale": scale_key,
             "scale_label": scale_conf["label"],
             "scales": _scale_options(),
+            "app_version": _app_version(),
             "generated_at": datetime.now(timezone.utc),
         },
         "clan": clan,
@@ -1473,6 +1490,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
             "scale": scale_key,
             "scale_label": scale_conf["label"],
             "scales": _scale_options(),
+            "app_version": _app_version(),
             "generated_at": datetime.now(timezone.utc),
         },
         "player": player,

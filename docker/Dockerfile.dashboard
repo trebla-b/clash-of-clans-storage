@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app /app/app
 COPY dashboard /app/dashboard
+COPY VERSION /app/VERSION
 
 ENV APP_CONFIG=/app/config/config.yml
 ENV PORT=8121
