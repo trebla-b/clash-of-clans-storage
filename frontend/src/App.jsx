@@ -272,8 +272,7 @@ function buildPlayerSnapshotChart(series) {
   };
 }
 
-function buildPlayerDeltaChart(series, capitalSeries) {
-  const raidLootByLabel = new Map((capitalSeries || []).map((item) => [item.label, Number(item?.loot || 0)]));
+function buildPlayerDeltaChart(series) {
   return {
     labels: series.map((item) => item.label),
     datasets: [
@@ -284,7 +283,7 @@ function buildPlayerDeltaChart(series, capitalSeries) {
       },
       {
         label: "Raid loot",
-        data: series.map((item) => raidLootByLabel.get(item.label) || 0),
+        data: series.map((item) => item.raid_loot_delta),
         backgroundColor: "rgba(77, 215, 248, 0.84)",
       },
     ],
@@ -646,7 +645,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
   const clanGamesMonthlySeries = charts?.clan_games_monthly || [];
 
   const snapshotChart = useMemo(() => buildPlayerSnapshotChart(snapshotSeries), [snapshotSeries]);
-  const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries, capitalSeries), [snapshotSeries, capitalSeries]);
+  const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries), [snapshotSeries]);
   const warChart = useMemo(() => buildPlayerWarChart(warSeries), [warSeries]);
   const capitalChart = useMemo(() => buildPlayerCapitalChart(capitalSeries), [capitalSeries]);
   const clanGamesMonthlyChart = useMemo(

@@ -639,6 +639,14 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                             0
                         )::BIGINT AS looted_resources_delta,
                         GREATEST(
+                            COALESCE(raid_loot, 0)
+                                - COALESCE(
+                                    LAG(raid_loot) OVER (PARTITION BY player_tag ORDER BY fetched_at),
+                                    COALESCE(raid_loot, 0)
+                                ),
+                            0
+                        )::BIGINT AS raid_loot_delta,
+                        GREATEST(
                             COALESCE(clan_capital_contributions, 0)
                                 - COALESCE(
                                     LAG(clan_capital_contributions) OVER (PARTITION BY player_tag ORDER BY fetched_at),
@@ -663,6 +671,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                             trophies_delta > 0
                             OR war_stars_delta > 0
                             OR looted_resources_delta > 0
+                            OR raid_loot_delta > 0
                             OR capital_delta > 0
                             OR donations_delta > 0
                         ) AS has_change
@@ -1063,6 +1072,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                     MAX(donations_received)::INT AS donations_received,
                     MAX(clan_games_points_total)::INT AS clan_games_points_total,
                     MAX(looted_resources_total)::BIGINT AS looted_resources_total,
+                    MAX(raid_loot)::INT AS raid_loot,
                     MAX(clan_capital_contributions)::INT AS clan_capital_contributions
                 FROM player_snapshots
                 WHERE player_tag = %s
@@ -1077,6 +1087,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 "donations": None,
                 "clan_games_points_total": None,
                 "looted_resources_total": None,
+                "raid_loot": None,
                 "clan_capital_contributions": None,
             }
             for row in snapshots:
@@ -1084,6 +1095,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                     "donations",
                     "clan_games_points_total",
                     "looted_resources_total",
+                    "raid_loot",
                     "clan_capital_contributions",
                 ):
                     current = _safe_int(row.get(metric))
@@ -1337,6 +1349,14 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                                 ),
                             0
                         ) AS looted_resources_delta,
+                        GREATEST(
+                            COALESCE(raid_loot, 0)
+                                - COALESCE(
+                                    LAG(raid_loot) OVER (ORDER BY fetched_at),
+                                    COALESCE(raid_loot, 0)
+                                ),
+                            0
+                        ) AS raid_loot_delta,
                         GREATEST(COALESCE(donations, 0) - COALESCE(LAG(donations) OVER (ORDER BY fetched_at), COALESCE(donations, 0)), 0)
                             AS donations_delta
                     FROM player_snapshots
@@ -1350,6 +1370,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                             trophies_delta > 0
                             OR war_stars_delta > 0
                             OR looted_resources_delta > 0
+                            OR raid_loot_delta > 0
                             OR capital_delta > 0
                             OR donations_delta > 0
                         ) AS has_change
@@ -1438,6 +1459,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
             "bucket": point.get("bucket"),
             "trophies": _safe_int(point.get("trophies")),
             "donations_delta": _safe_int(point.get("donations_delta")),
+            "raid_loot_delta": _safe_int(point.get("raid_loot_delta")),
             "clan_games_delta": _safe_int(point.get("clan_games_points_total_delta")),
             "capital_delta": _safe_int(point.get("clan_capital_contributions_delta")),
         }

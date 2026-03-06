@@ -35,6 +35,34 @@ def _extract_cwl_war_tags(group_payload: dict | None) -> list[str]:
     return sorted(tags)
 
 
+def _extract_latest_raid_loot_by_player(capital_raid_payload: dict | None) -> dict[str, int]:
+    if not capital_raid_payload:
+        return {}
+
+    seasons = capital_raid_payload.get("items") or []
+    latest_season: dict | None = None
+    latest_start = None
+    for season in seasons:
+        start = storage.parse_coc_time(season.get("startTime"))
+        if latest_start is None or (start is not None and start > latest_start):
+            latest_start = start
+            latest_season = season
+
+    if not latest_season:
+        return {}
+
+    by_player: dict[str, int] = {}
+    for member in latest_season.get("members") or []:
+        tag = member.get("tag")
+        if not tag:
+            continue
+        try:
+            by_player[str(tag)] = int(member.get("capitalResourcesLooted") or 0)
+        except (TypeError, ValueError):
+            by_player[str(tag)] = 0
+    return by_player
+
+
 def _safe_fetch(name: str, fn):
     try:
         return fn()
@@ -73,6 +101,7 @@ def main() -> int:
         "capital raid seasons",
         lambda: client.get_capital_raid_seasons(clan_tag, limit=6),
     )
+    latest_raid_loot_by_player = _extract_latest_raid_loot_by_player(capital_raid_payload)
 
     cwl_war_tags = _extract_cwl_war_tags(cwl_group)
     finalized_cwl_war_ids: set[str] = set()
@@ -106,7 +135,12 @@ def main() -> int:
 
             for player in players_payload:
                 storage.upsert_player(conn, player)
-                storage.insert_player_snapshot(conn, player)
+                player_tag = str(player.get("tag") or "")
+                storage.insert_player_snapshot(
+                    conn,
+                    player,
+                    raid_loot=int(latest_raid_loot_by_player.get(player_tag, 0)),
+                )
 
             storage.sync_memberships(conn, clan_tag, member_tags)
 

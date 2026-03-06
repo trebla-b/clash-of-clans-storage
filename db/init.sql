@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS player_snapshots (
     builder_base_league_name TEXT,
     clan_games_points_total INTEGER,
     looted_resources_total BIGINT,
+    raid_loot INTEGER,
     raw_json JSONB NOT NULL
 );
 
@@ -96,6 +97,7 @@ ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS league_tier_name TEXT;
 ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS builder_base_league_name TEXT;
 ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS clan_games_points_total INTEGER;
 ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT;
+ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS raid_loot INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_player_snapshots_tag_time
     ON player_snapshots (player_tag, fetched_at DESC);
