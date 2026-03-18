@@ -59,6 +59,12 @@ const WAR_FAMILY_LABEL = {
   ldc: "LDC",
 };
 
+const WAR_STATE_LABEL = {
+  preparation: "Préparation",
+  inwar: "Guerre en cours",
+  warended: "Guerre terminée",
+};
+
 const PLAYER_SORT_DEFAULT = {
   key: "health_score",
   direction: "desc",
@@ -162,6 +168,54 @@ function fmtDateOnly(value) {
     return "-";
   }
   return longDateFmt.format(date);
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getWarFamilyKey(warType) {
+  return String(warType || "").toLowerCase() === "cwl" ? "ldc" : "gdc";
+}
+
+function getWarStateLabel(state) {
+  return WAR_STATE_LABEL[String(state || "").toLowerCase()] || "État inconnu";
+}
+
+function getWarParticipationStatus({ state, used, capacity }) {
+  const stateKey = String(state || "").toLowerCase();
+  if (stateKey !== "warended") {
+    if (stateKey === "preparation") {
+      return { label: "Prépa", tone: "neutral" };
+    }
+    if (used >= capacity && capacity > 0) {
+      return { label: "Joué", tone: "success" };
+    }
+    if (used > 0) {
+      return { label: "En cours", tone: "info" };
+    }
+    return { label: "A faire", tone: "info" };
+  }
+  if (used >= capacity && capacity > 0) {
+    return { label: "Complet", tone: "success" };
+  }
+  if (used <= 0) {
+    return { label: "Absent", tone: "danger" };
+  }
+  return { label: "Partiel", tone: "warning" };
+}
+
+function formatWarCapacityNote({ ended, missed, remaining }) {
+  if (ended) {
+    if (missed <= 0) {
+      return "aucun oubli";
+    }
+    return `${fmtInt(missed)} ${missed > 1 ? "oubliées" : "oubliée"}`;
+  }
+  if (remaining <= 0) {
+    return "tout joué";
+  }
+  return `${fmtInt(remaining)} ${remaining > 1 ? "restantes" : "restante"}`;
 }
 
 function buildClanPointsChart(points) {
@@ -304,32 +358,39 @@ function buildPlayerClanGamesMonthlyChart(series) {
   };
 }
 
-function buildPlayerWarChart(series) {
-  return {
-    labels: series.map((item) => item.label),
-    datasets: [
-      {
-        label: "Attaques utilisées",
-        data: series.map((item) => item.used),
-        backgroundColor: "rgba(85, 230, 169, 0.85)",
-        stack: "attacks",
-      },
-      {
-        label: "Attaques oubliées",
-        data: series.map((item) => item.missed),
-        backgroundColor: "rgba(255, 118, 86, 0.9)",
-        stack: "attacks",
-      },
-      {
-        label: "Etoiles",
-        data: series.map((item) => item.stars),
-        type: "line",
-        borderColor: "#4dd7f8",
-        yAxisID: "y1",
-        tension: 0.25,
-      },
-    ],
-  };
+function buildPlayerWarTimeline(wars, family) {
+  return (wars || [])
+    .filter((war) => family === "overall" || getWarFamilyKey(war?.war_type) === family)
+    .map((war) => {
+      const capacity = Math.max(Number(war?.attack_capacity || 0), 1);
+      const used = clamp(Number(war?.attacks_used || 0), 0, capacity);
+      const ended = String(war?.state || "").toLowerCase() === "warended";
+      const missed = ended ? clamp(Number(war?.missed_attacks || 0), 0, Math.max(capacity - used, 0)) : 0;
+      const remaining = Math.max(capacity - used - missed, 0);
+      const participationRate = (used / capacity) * 100;
+      const familyKey = getWarFamilyKey(war?.war_type);
+      const status = getWarParticipationStatus({ state: war?.state, used, capacity });
+
+      return {
+        key: war?.war_id || `${war?.start_time || ""}-${war?.opponent_name || ""}`,
+        familyLabel: WAR_FAMILY_LABEL[familyKey],
+        dateLabel: fmtDate(war?.start_time),
+        opponentLabel: war?.opponent_name || "Adversaire inconnu",
+        stateLabel: getWarStateLabel(war?.state),
+        statusLabel: status.label,
+        statusTone: status.tone,
+        participationRate,
+        used,
+        capacity,
+        missed,
+        remaining,
+        usedPct: (used / capacity) * 100,
+        missedPct: (missed / capacity) * 100,
+        remainingPct: (remaining / capacity) * 100,
+        capacityNote: formatWarCapacityNote({ ended, missed, remaining }),
+        stars: Number(war?.total_attack_stars || 0),
+      };
+    });
 }
 
 function buildPlayerCapitalChart(series) {
@@ -453,6 +514,94 @@ function ScaleBar({ scales, currentScale, onChange }) {
           </Pressable>
         );
       })}
+    </View>
+  );
+}
+
+function LegendItem({ color, label }) {
+  return (
+    <View style={styles.legendItem}>
+      <View style={[styles.legendSwatch, { backgroundColor: color }]} />
+      <Text style={styles.legendLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function WarParticipationTimeline({ wars }) {
+  if (!wars.length) {
+    return <Text style={styles.emptyText}>Aucune guerre disponible pour ce filtre.</Text>;
+  }
+
+  return (
+    <View style={styles.warTimelineWrap}>
+      <View style={styles.legendRow}>
+        <LegendItem color="rgba(85, 230, 169, 0.9)" label="Utilisées" />
+        <LegendItem color="rgba(255, 118, 86, 0.9)" label="Oubliées" />
+        <LegendItem color="rgba(77, 215, 248, 0.42)" label="Restantes / non jouées" />
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.warTimelineList}>
+        {wars.map((war) => {
+          const statusStyle = [
+            styles.warChip,
+            styles.warChipStatus,
+            war.statusTone === "success" && styles.warChipStatusSuccess,
+            war.statusTone === "warning" && styles.warChipStatusWarning,
+            war.statusTone === "danger" && styles.warChipStatusDanger,
+            war.statusTone === "info" && styles.warChipStatusInfo,
+            war.statusTone === "neutral" && styles.warChipStatusNeutral,
+          ];
+          const statusTextStyle = [
+            styles.warChipText,
+            war.statusTone === "success" && styles.warChipTextSuccess,
+            war.statusTone === "warning" && styles.warChipTextWarning,
+            war.statusTone === "danger" && styles.warChipTextDanger,
+            war.statusTone === "info" && styles.warChipTextInfo,
+            war.statusTone === "neutral" && styles.warChipTextNeutral,
+          ];
+
+          return (
+            <View key={war.key} style={styles.warCard}>
+              <View style={styles.warCardHeader}>
+                <Text style={styles.warCardDate}>{war.dateLabel}</Text>
+                <View style={styles.warCardChipRow}>
+                  <View style={[styles.warChip, styles.warChipType]}>
+                    <Text style={styles.warChipText}>{war.familyLabel}</Text>
+                  </View>
+                  <View style={statusStyle}>
+                    <Text style={statusTextStyle}>{war.statusLabel}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <Text style={styles.warCardOpponent} numberOfLines={1}>
+                {war.opponentLabel}
+              </Text>
+
+              <Text style={styles.warCardRate}>{fmtPct(war.participationRate)}</Text>
+
+              <View style={styles.warCardTrack}>
+                {war.usedPct > 0 ? <View style={[styles.warCardSegment, styles.warCardSegmentUsed, { width: `${war.usedPct}%` }]} /> : null}
+                {war.missedPct > 0 ? <View style={[styles.warCardSegment, styles.warCardSegmentMissed, { width: `${war.missedPct}%` }]} /> : null}
+                {war.remainingPct > 0 ? (
+                  <View style={[styles.warCardSegment, styles.warCardSegmentRemaining, { width: `${war.remainingPct}%` }]} />
+                ) : null}
+              </View>
+
+              <View style={styles.warCardMetaRow}>
+                <Text style={styles.warCardMetaPrimary}>
+                  {fmtInt(war.used)}/{fmtInt(war.capacity)} attaques
+                </Text>
+                <Text style={styles.warCardMetaSecondary}>{war.capacityNote}</Text>
+              </View>
+
+              <View style={styles.warCardMetaRow}>
+                <Text style={styles.warCardMetaSecondary}>{war.stateLabel}</Text>
+                <Text style={styles.warCardStars}>{fmtInt(war.stars)}★</Text>
+              </View>
+            </View>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 }
@@ -641,13 +790,12 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
   const charts = data?.charts || {};
 
   const snapshotSeries = charts?.snapshots || [];
-  const warSeries = charts?.war_history?.[family] || [];
   const capitalSeries = charts?.capital_history || [];
   const clanGamesMonthlySeries = charts?.clan_games_monthly || [];
+  const warTimeline = useMemo(() => buildPlayerWarTimeline(data?.histories?.wars || [], family), [data?.histories?.wars, family]);
 
   const snapshotChart = useMemo(() => buildPlayerSnapshotChart(snapshotSeries), [snapshotSeries]);
   const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries, capitalSeries), [snapshotSeries, capitalSeries]);
-  const warChart = useMemo(() => buildPlayerWarChart(warSeries), [warSeries]);
   const capitalChart = useMemo(() => buildPlayerCapitalChart(capitalSeries), [capitalSeries]);
   const clanGamesMonthlyChart = useMemo(
     () => buildPlayerClanGamesMonthlyChart(clanGamesMonthlySeries),
@@ -730,7 +878,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
         </View>
       </Panel>
 
-      <Panel title="Participation guerre" subtitle="attaques oubliées comptées seulement si guerre terminée">
+      <Panel title="Participation guerre" subtitle="timeline par guerre, plus récent à gauche · oublis comptés seulement si guerre terminée">
         <View style={styles.scaleRow}>
           {Object.keys(WAR_FAMILY_LABEL).map((key) => {
             const active = family === key;
@@ -745,9 +893,7 @@ function PlayerView({ data, scale, onScaleChange, onBack }) {
             );
           })}
         </View>
-        <View style={styles.chartWrap}>
-          <Bar data={warChart} options={chartOptions({ stacked: true, dualAxis: true })} />
-        </View>
+        <WarParticipationTimeline wars={warTimeline} />
       </Panel>
 
       <Panel title="Capitale" subtitle="loot et exécution par weekend (ven-lun)">
@@ -1075,6 +1221,160 @@ const styles = StyleSheet.create({
   },
   chartWrap: {
     height: 300,
+  },
+  warTimelineWrap: {
+    gap: 12,
+  },
+  legendRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  legendSwatch: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+  },
+  legendLabel: {
+    color: "#95bfd2",
+    fontSize: 12,
+  },
+  warTimelineList: {
+    gap: 12,
+    paddingBottom: 4,
+    paddingRight: 8,
+  },
+  warCard: {
+    width: 220,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(139, 214, 239, 0.18)",
+    backgroundColor: "rgba(10, 29, 52, 0.78)",
+    padding: 14,
+    gap: 12,
+  },
+  warCardHeader: {
+    gap: 8,
+  },
+  warCardDate: {
+    color: "#b8d9e9",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  warCardChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  warChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  warChipType: {
+    backgroundColor: "rgba(77, 215, 248, 0.14)",
+    borderColor: "rgba(134, 231, 255, 0.28)",
+  },
+  warChipStatus: {
+    backgroundColor: "rgba(114, 150, 174, 0.12)",
+    borderColor: "rgba(140, 182, 205, 0.28)",
+  },
+  warChipStatusSuccess: {
+    backgroundColor: "rgba(85, 230, 169, 0.14)",
+    borderColor: "rgba(121, 243, 191, 0.34)",
+  },
+  warChipStatusWarning: {
+    backgroundColor: "rgba(255, 195, 91, 0.12)",
+    borderColor: "rgba(255, 210, 126, 0.34)",
+  },
+  warChipStatusDanger: {
+    backgroundColor: "rgba(255, 118, 86, 0.14)",
+    borderColor: "rgba(255, 159, 136, 0.34)",
+  },
+  warChipStatusInfo: {
+    backgroundColor: "rgba(77, 215, 248, 0.14)",
+    borderColor: "rgba(134, 231, 255, 0.34)",
+  },
+  warChipStatusNeutral: {
+    backgroundColor: "rgba(128, 156, 176, 0.12)",
+    borderColor: "rgba(157, 184, 203, 0.3)",
+  },
+  warChipText: {
+    color: "#d8f1fb",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  warChipTextSuccess: {
+    color: "#78efbf",
+  },
+  warChipTextWarning: {
+    color: "#ffd06e",
+  },
+  warChipTextDanger: {
+    color: "#ff9f88",
+  },
+  warChipTextInfo: {
+    color: "#93e8ff",
+  },
+  warChipTextNeutral: {
+    color: "#c3d9e5",
+  },
+  warCardOpponent: {
+    color: "#eefaff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  warCardRate: {
+    color: "#ecfbff",
+    fontSize: 28,
+    fontWeight: "800",
+  },
+  warCardTrack: {
+    flexDirection: "row",
+    height: 12,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "rgba(20, 50, 77, 0.92)",
+  },
+  warCardSegment: {
+    height: "100%",
+  },
+  warCardSegmentUsed: {
+    backgroundColor: "rgba(85, 230, 169, 0.92)",
+  },
+  warCardSegmentMissed: {
+    backgroundColor: "rgba(255, 118, 86, 0.92)",
+  },
+  warCardSegmentRemaining: {
+    backgroundColor: "rgba(77, 215, 248, 0.42)",
+  },
+  warCardMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  warCardMetaPrimary: {
+    color: "#e6f8ff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  warCardMetaSecondary: {
+    color: "#8fb9cc",
+    fontSize: 12,
+  },
+  warCardStars: {
+    color: "#ffd06e",
+    fontSize: 13,
+    fontWeight: "800",
   },
   listWrap: {
     gap: 10,
