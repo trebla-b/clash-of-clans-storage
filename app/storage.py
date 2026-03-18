@@ -22,7 +22,6 @@ def ensure_runtime_schema(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT")
         cur.execute("ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS looted_resources_total BIGINT")
-        cur.execute("ALTER TABLE player_snapshots ADD COLUMN IF NOT EXISTS raid_loot INTEGER")
         cur.execute(
             """
             CREATE OR REPLACE VIEW v_current_clan_members AS
@@ -399,7 +398,7 @@ def upsert_player(conn: psycopg.Connection, player: dict) -> None:
         )
 
 
-def insert_player_snapshot(conn: psycopg.Connection, player: dict, raid_loot: int = 0) -> None:
+def insert_player_snapshot(conn: psycopg.Connection, player: dict) -> None:
     clan = player.get("clan") or {}
     league_tier = extract_league_tier(player)
     builder_base_league = player.get("builderBaseLeague") or {}
@@ -422,10 +421,9 @@ def insert_player_snapshot(conn: psycopg.Connection, player: dict, raid_loot: in
                 builder_base_league_name,
                 clan_games_points_total,
                 looted_resources_total,
-                raid_loot,
                 raw_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 player.get("tag"),
@@ -440,7 +438,6 @@ def insert_player_snapshot(conn: psycopg.Connection, player: dict, raid_loot: in
                 builder_base_league.get("name"),
                 clan_games_points_total,
                 looted_resources_total,
-                raid_loot,
                 Json(player),
             ),
         )
