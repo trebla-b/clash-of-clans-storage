@@ -128,6 +128,9 @@ function parseRoute() {
   if (parts[0] === "players" && parts[1]) {
     return { view: "player", tag: decodeURIComponent(parts[1]) };
   }
+  if (parts[0] === "raids") {
+    return { view: "capital" };
+  }
   return { view: "overview" };
 }
 
@@ -168,6 +171,28 @@ function fmtDateOnly(value) {
     return "-";
   }
   return longDateFmt.format(date);
+}
+
+function fmtRaidWindow(start, end) {
+  const startText = fmtDateOnly(start);
+  const endText = fmtDateOnly(end);
+  if (startText === "-" && endText === "-") {
+    return "-";
+  }
+  if (endText === "-") {
+    return startText;
+  }
+  return `${startText} -> ${endText}`;
+}
+
+function fmtSignedInt(value) {
+  const number = Math.round(Number(value || 0));
+  return `${number > 0 ? "+" : ""}${fmtInt(number)}`;
+}
+
+function fmtSignedFloat(value, suffix = "") {
+  const number = Number(value || 0);
+  return `${number > 0 ? "+" : ""}${number.toFixed(1)}${suffix}`;
 }
 
 function clamp(value, min, max) {
@@ -424,7 +449,56 @@ function buildPlayerCapitalChart(series) {
   };
 }
 
-function chartOptions({ stacked = false, dualAxis = false, radar = false } = {}) {
+function buildCapitalTrendChart(series) {
+  return {
+    labels: series.map((item) => item.label),
+    datasets: [
+      {
+        label: "Loot total",
+        data: series.map((item) => item.loot),
+        backgroundColor: "rgba(77, 215, 248, 0.82)",
+      },
+      {
+        label: "Districts détruits",
+        data: series.map((item) => item.districts),
+        type: "line",
+        borderColor: "#ffc35b",
+        yAxisID: "y1",
+        tension: 0.3,
+      },
+    ],
+  };
+}
+
+function buildCapitalExecutionChart(series) {
+  return {
+    labels: series.map((item) => item.label),
+    datasets: [
+      {
+        label: "Attaques utilisées",
+        data: series.map((item) => item.attacks),
+        backgroundColor: "rgba(85, 230, 169, 0.82)",
+      },
+      {
+        label: "Capacité",
+        data: series.map((item) => item.capacity),
+        type: "line",
+        borderColor: "#4dd7f8",
+        tension: 0.25,
+      },
+      {
+        label: "Participation %",
+        data: series.map((item) => item.participation_rate),
+        type: "line",
+        borderColor: "#ffc35b",
+        yAxisID: "y1",
+        tension: 0.25,
+      },
+    ],
+  };
+}
+
+function chartOptions({ stacked = false, dualAxis = false, radar = false, y1Max, y1TickSuffix = "" } = {}) {
   if (radar) {
     return {
       maintainAspectRatio: false,
@@ -468,7 +542,18 @@ function chartOptions({ stacked = false, dualAxis = false, radar = false } = {})
         ? {
             y1: {
               position: "right",
-              ticks: { color: "#b4d9e6", precision: 0 },
+              ticks: {
+                color: "#b4d9e6",
+                precision: 0,
+                ...(y1TickSuffix
+                  ? {
+                      callback(value) {
+                        return `${value}${y1TickSuffix}`;
+                      },
+                    }
+                  : {}),
+              },
+              ...(typeof y1Max === "number" ? { max: y1Max } : {}),
               grid: { drawOnChartArea: false },
             },
           }
@@ -511,6 +596,30 @@ function ScaleBar({ scales, currentScale, onChange }) {
             style={[styles.scaleChip, active && styles.scaleChipActive]}
           >
             <Text style={[styles.scaleChipText, active && styles.scaleChipTextActive]}>{scale.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function MainNav({ currentView, onOpenOverview, onOpenCapital }) {
+  const items = [
+    { key: "overview", label: "Clan", onPress: onOpenOverview },
+    { key: "capital", label: "Raids", onPress: onOpenCapital },
+  ];
+
+  return (
+    <View style={styles.mainNav}>
+      {items.map((item) => {
+        const active = currentView === item.key;
+        return (
+          <Pressable
+            key={item.key}
+            onPress={item.onPress}
+            style={[styles.mainNavChip, active && styles.mainNavChipActive]}
+          >
+            <Text style={[styles.mainNavChipText, active && styles.mainNavChipTextActive]}>{item.label}</Text>
           </Pressable>
         );
       })}
@@ -778,6 +887,138 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
   );
 }
 
+function CapitalView({ data, scale, onScaleChange }) {
+  const clan = data?.clan || {};
+  const capital = data?.capital || {};
+  const summary = capital?.summary || {};
+  const latest = capital?.latest || {};
+  const latestCompleted = summary?.latest_completed || {};
+  const bestWeekend = summary?.best_weekend || {};
+  const raidHistory = capital?.history || [];
+  const latestRaid = raidHistory[0] || latest;
+  const raidSeries = data?.charts?.capital_weekends || [];
+
+  const capitalTrendChart = useMemo(() => buildCapitalTrendChart(raidSeries), [raidSeries]);
+  const capitalExecutionChart = useMemo(() => buildCapitalExecutionChart(raidSeries), [raidSeries]);
+
+  const lootTrend = Number(summary?.recent_completed_avg_loot || 0) - Number(summary?.previous_completed_avg_loot || 0);
+  const participationTrend =
+    Number(summary?.recent_completed_avg_participation || 0) - Number(summary?.previous_completed_avg_participation || 0);
+  const hasTrendComparison = Number(summary?.completed_weekends || 0) >= 2;
+  const latestStateLabel = latestRaid?.is_completed ? "Terminé" : "En cours";
+
+  return (
+    <>
+      <View style={styles.hero}>
+        <Text style={styles.heroEyebrow}>Tendance capitale sur plusieurs weekends</Text>
+        <Text style={styles.heroTitle}>Raids {clan.name || "Clan"}</Text>
+        <Text style={styles.heroSubtitle}>
+          {clan.tag || "-"} · vue cumulée weekend par weekend pour éviter l'effet remise à zéro du raid en cours
+        </Text>
+        <ScaleBar scales={data?.meta?.scales} currentScale={scale} onChange={onScaleChange} />
+      </View>
+
+      <View style={styles.metricsGrid}>
+        <Metric
+          label="Raid courant"
+          value={fmtInt(latestRaid?.capital_total_loot)}
+          hint={`${latestStateLabel} · ${fmtRaidWindow(latestRaid?.season_start_time, latestRaid?.season_end_time)}`}
+        />
+        <Metric
+          label="Dernier raid terminé"
+          value={fmtInt(latestCompleted?.capital_total_loot)}
+          hint={fmtRaidWindow(latestCompleted?.season_start_time, latestCompleted?.season_end_time)}
+        />
+        <Metric
+          label="Exécution dernier terminé"
+          value={fmtPct(latestCompleted?.participation_rate)}
+          hint={`${fmtInt(latestCompleted?.used_attacks)}/${fmtInt(latestCompleted?.capacity_attacks)} attaques`}
+        />
+        <Metric
+          label="Meilleur weekend"
+          value={fmtInt(bestWeekend?.capital_total_loot)}
+          hint={fmtRaidWindow(bestWeekend?.season_start_time, bestWeekend?.season_end_time)}
+        />
+        <Metric
+          label="Moyenne loot"
+          value={fmtInt(summary?.average_loot)}
+          hint={`${fmtInt(summary?.completed_weekends)} weekends terminés`}
+        />
+        <Metric
+          label="Moyenne exécution"
+          value={fmtPct(summary?.average_participation)}
+          hint="sur raids terminés"
+        />
+      </View>
+
+      <View style={styles.metricsGrid}>
+        <Metric
+          label="Tendance loot"
+          value={hasTrendComparison ? fmtSignedInt(lootTrend) : "-"}
+          hint="moyenne 3 derniers raids vs précédents"
+          danger={hasTrendComparison && lootTrend < 0}
+        />
+        <Metric
+          label="Tendance exécution"
+          value={hasTrendComparison ? fmtSignedFloat(participationTrend, " pts") : "-"}
+          hint="moyenne 3 derniers raids vs précédents"
+          danger={hasTrendComparison && participationTrend < 0}
+        />
+      </View>
+
+      <View style={styles.panelRow}>
+        <Panel title="Tendance loot" subtitle="volume cumulé par weekend raid" wide>
+          <View style={styles.chartWrap}>
+            <Bar data={capitalTrendChart} options={chartOptions({ dualAxis: true })} />
+          </View>
+        </Panel>
+        <Panel title="Exécution raids" subtitle="attaques jouées, capacité et participation">
+          <View style={styles.chartWrap}>
+            <Bar data={capitalExecutionChart} options={chartOptions({ dualAxis: true, y1Max: 100, y1TickSuffix: "%" })} />
+          </View>
+        </Panel>
+      </View>
+
+      <Panel title="Historique cumulé par raid" subtitle="une ligne par weekend pour suivre la tendance réelle">
+        {raidHistory.length === 0 ? (
+          <Text style={styles.emptyText}>Aucun weekend raid trouvé sur cette période.</Text>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tableScrollContent}>
+            <View style={[styles.tableWrap, styles.tableWide]}>
+              <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                <Text style={[styles.tableCell, styles.cellName]}>Weekend</Text>
+                <Text style={styles.tableCell}>Etat</Text>
+                <Text style={styles.tableCell}>Loot</Text>
+                <Text style={styles.tableCell}>Δ loot</Text>
+                <Text style={styles.tableCell}>Attaques</Text>
+                <Text style={styles.tableCell}>Exécution</Text>
+                <Text style={styles.tableCell}>Districts</Text>
+                <Text style={styles.tableCell}>Loot/atk</Text>
+              </View>
+              {raidHistory.map((raid) => (
+                <View key={raid.season_start_time || `${raid.season_end_time || "raid"}`} style={styles.tableRow}>
+                  <Text style={[styles.tableCell, styles.cellName]} numberOfLines={1}>
+                    {fmtRaidWindow(raid.season_start_time, raid.season_end_time)}
+                  </Text>
+                  <Text style={styles.tableCell}>{raid.is_completed ? "Terminé" : "En cours"}</Text>
+                  <Text style={styles.tableCell}>{fmtInt(raid.capital_total_loot)}</Text>
+                  <Text style={styles.tableCell}>{fmtSignedInt(raid.capital_total_loot_delta)}</Text>
+                  <Text style={styles.tableCell}>
+                    {fmtInt(raid.used_attacks)}/{fmtInt(raid.capacity_attacks)}
+                  </Text>
+                  <Text style={styles.tableCell}>{fmtPct(raid.participation_rate)}</Text>
+                  <Text style={styles.tableCell}>{fmtInt(raid.enemy_districts_destroyed)}</Text>
+                  <Text style={styles.tableCell}>{fmtInt(raid.loot_per_attack)}</Text>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        )}
+      </Panel>
+    </>
+  );
+}
+
 function PlayerView({ data, scale, onScaleChange, onBack }) {
   const [family, setFamily] = useState("overall");
 
@@ -945,6 +1186,11 @@ export default function App() {
     setRoute({ view: "overview" });
   }, []);
 
+  const navigateCapital = useCallback(() => {
+    window.history.pushState({}, "", "/raids");
+    setRoute({ view: "capital" });
+  }, []);
+
   const navigatePlayer = useCallback((tag) => {
     const slug = String(tag || "").replace(/^#/, "");
     window.history.pushState({}, "", `/players/${encodeURIComponent(slug)}`);
@@ -1004,6 +1250,8 @@ export default function App() {
 
       <ScrollView contentContainerStyle={styles.page}>
         <View style={styles.shell}>
+          <MainNav currentView={route.view} onOpenOverview={navigateOverview} onOpenCapital={navigateCapital} />
+
           {loading ? (
             <View style={styles.stateBox}>
               <ActivityIndicator size="large" color="#6ee9f8" />
@@ -1027,6 +1275,14 @@ export default function App() {
               scale={scale}
               onScaleChange={setScale}
               onOpenPlayer={navigatePlayer}
+            />
+          ) : null}
+
+          {!loading && !error && route.view === "capital" && overviewData ? (
+            <CapitalView
+              data={overviewData}
+              scale={scale}
+              onScaleChange={setScale}
             />
           ) : null}
 
@@ -1090,6 +1346,32 @@ const styles = StyleSheet.create({
     maxWidth: 1220,
     marginHorizontal: "auto",
     gap: 16,
+  },
+  mainNav: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    alignSelf: "flex-start",
+  },
+  mainNavChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(147, 224, 247, 0.22)",
+    backgroundColor: "rgba(8, 21, 40, 0.7)",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  mainNavChipActive: {
+    backgroundColor: "rgba(85, 230, 169, 0.16)",
+    borderColor: "rgba(121, 243, 191, 0.46)",
+  },
+  mainNavChipText: {
+    color: "#9cc8dc",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  mainNavChipTextActive: {
+    color: "#effbff",
   },
   hero: {
     borderRadius: 24,
@@ -1414,6 +1696,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(142, 222, 247, 0.2)",
     overflow: "hidden",
+  },
+  tableScrollContent: {
+    paddingBottom: 4,
+    paddingRight: 8,
+  },
+  tableWide: {
+    minWidth: 980,
   },
   tableRow: {
     flexDirection: "row",
