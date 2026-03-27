@@ -11,6 +11,19 @@ from waitress import serve
 
 from app.config import DEFAULT_DB_URL, load_config
 from app import storage as app_storage
+from dashboard.metrics import (
+    compute_clan_health as _compute_clan_health,
+    compute_delta as _compute_delta,
+    compute_monthly_progress as _compute_monthly_progress,
+    compute_participation_rate as _compute_participation_rate,
+    compute_player_activity_score as _compute_player_activity_score,
+    dt_label as _dt_label,
+    safe_float as _safe_float,
+    safe_int as _safe_int,
+    serialize_json as _serialize_json,
+    war_bucket_key as _war_bucket_key,
+    war_summary_row as _war_summary_row,
+)
 
 try:
     CONFIG = load_config()
@@ -30,11 +43,6 @@ SCALES: dict[str, dict[str, Any]] = {
     "all": {"label": "Depuis le début", "days": None, "snapshot_bucket": "week", "war_bucket": "month"},
 }
 DEFAULT_SCALE = "30d"
-
-WAR_TYPE_MAP = {
-    "regular": "gdc",
-    "cwl": "ldc",
-}
 
 app = Flask(__name__)
 _SCHEMA_READY = False
@@ -88,156 +96,6 @@ def _from_time(scale_key: str) -> datetime | None:
     return datetime.now(timezone.utc) - timedelta(days=int(days))
 
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None:
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        if value is None:
-            return default
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _grade(score: float) -> str:
-    if score >= 85:
-        return "A"
-    if score >= 70:
-        return "B"
-    if score >= 55:
-        return "C"
-    return "D"
-
-
-def _compute_clan_health(
-    war_capacity: int,
-    war_missed: int,
-    donations_avg: float,
-    capital_capacity: int,
-    capital_used: int,
-    freshness_hours: float,
-) -> dict[str, Any]:
-    war_score = 70.0
-    if war_capacity > 0:
-        war_score = max(0.0, min(100.0, (1.0 - (war_missed / war_capacity)) * 100.0))
-
-    donation_score = max(0.0, min(100.0, (donations_avg / 350.0) * 100.0))
-
-    capital_score = 65.0
-    if capital_capacity > 0:
-        capital_score = max(0.0, min(100.0, (capital_used / capital_capacity) * 100.0))
-
-    freshness_score = 20.0
-    if freshness_hours <= 2:
-        freshness_score = 100.0
-    elif freshness_hours <= 6:
-        freshness_score = 85.0
-    elif freshness_hours <= 24:
-        freshness_score = 60.0
-    elif freshness_hours <= 48:
-        freshness_score = 45.0
-
-    score = (war_score * 0.42) + (capital_score * 0.25) + (donation_score * 0.18) + (freshness_score * 0.15)
-    score = round(score, 1)
-
-    return {
-        "score": score,
-        "grade": _grade(score),
-        "components": {
-            "discipline_guerre": round(war_score, 1),
-            "execution_capitale": round(capital_score, 1),
-            "solidarite_dons": round(donation_score, 1),
-            "fraicheur_data": round(freshness_score, 1),
-        },
-    }
-
-
-def _compute_player_activity_score(
-    *,
-    attack_stars: int,
-    donations: int,
-    raid_loot: int,
-    jdc: int,
-    missed_attacks: int,
-) -> float:
-    return round((attack_stars * 500.0) + donations + (raid_loot / 5.0) + jdc - (missed_attacks * 1000.0), 1)
-
-
-def _dt_label(value: datetime | None, bucket: str) -> str:
-    if value is None:
-        return "-"
-    local = value.astimezone()
-    if bucket == "hour":
-        return local.strftime("%d/%m %Hh")
-    if bucket == "day":
-        return local.strftime("%d/%m")
-    if bucket == "week":
-        return "S" + local.strftime("%V")
-    return local.strftime("%m/%Y")
-
-
-def _war_bucket_key(raw_type: str | None) -> str:
-    return WAR_TYPE_MAP.get(str(raw_type or "").lower(), "gdc")
-
-
-def _war_summary_row(row: dict[str, Any]) -> dict[str, Any]:
-    wars_ended = _safe_int(row.get("wars_ended"))
-    wins = _safe_int(row.get("wins"))
-    return {
-        "wars_ended": wars_ended,
-        "wins": wins,
-        "losses": _safe_int(row.get("losses")),
-        "draws": _safe_int(row.get("draws")),
-        "attack_capacity": _safe_int(row.get("attack_capacity")),
-        "attacks_used": _safe_int(row.get("attacks_used")),
-        "missed_attacks": _safe_int(row.get("missed_attacks")),
-        "win_rate": round((wins / wars_ended) * 100.0, 1) if wars_ended > 0 else 0.0,
-    }
-
-
-def _compute_participation_rate(attacks_used: int, attack_capacity: int) -> float:
-    if attack_capacity <= 0:
-        return 0.0
-    return round((attacks_used / attack_capacity) * 100.0, 1)
-
-
-def _compute_delta(current: int | float, previous: int | float | None) -> float:
-    if previous is None:
-        return 0.0
-    return round(float(current) - float(previous), 1)
-
-
-def _compute_monthly_progress(
-    current_total: int | float | None,
-    *,
-    previous_total: int | float | None = None,
-    month_floor_total: int | float | None = None,
-) -> int:
-    current = _safe_int(current_total)
-    if previous_total is not None:
-        return max(current - _safe_int(previous_total), 0)
-    if month_floor_total is not None:
-        return max(current - _safe_int(month_floor_total), 0)
-    return 0
-
-
-def _serialize_json(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, list):
-        return [_serialize_json(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _serialize_json(item) for key, item in value.items()}
-    return value
-
-
 def _app_version() -> str:
     if APP_VERSION_OVERRIDE:
         return APP_VERSION_OVERRIDE.strip()
@@ -249,6 +107,49 @@ def _app_version() -> str:
     except OSError:
         pass
     return "0.0.0"
+
+
+def _meta_payload(scale_key: str, scale_conf: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "scale": scale_key,
+        "scale_label": scale_conf["label"],
+        "scales": _scale_options(),
+        "app_version": _app_version(),
+        "generated_at": datetime.now(timezone.utc),
+    }
+
+
+def _empty_overview_payload(scale_key: str, scale_conf: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "meta": _meta_payload(scale_key, scale_conf),
+        "clan": {"tag": DEFAULT_CLAN_TAG, "name": "Aucune donnée", "members": 0},
+        "kpis": {},
+        "wars": {
+            "overall": _war_summary_row({}),
+            "gdc": _war_summary_row({}),
+            "ldc": _war_summary_row({}),
+        },
+        "health": {"score": 0.0, "grade": "D", "components": {}},
+        "players": [],
+        "at_risk": [],
+        "top_contributors": [],
+        "capital": {
+            "latest": {},
+            "top_members": [],
+            "used_attacks": 0,
+            "capacity_attacks": 0,
+            "history": [],
+            "summary": {},
+        },
+        "freshness": {},
+        "charts": {
+            "clan_points": [],
+            "war_outcomes": {"gdc": [], "ldc": [], "overall": []},
+            "health_components": [],
+            "clan_games": [],
+            "capital_weekends": [],
+        },
+    }
 
 
 def _load_overview(scale_key: str) -> dict[str, Any]:
@@ -295,45 +196,10 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     ORDER BY updated_at DESC
                     LIMIT 1
                     """,
-                )
+            )
 
             if not clan:
-                return {
-                    "meta": {
-                        "scale": scale_key,
-                        "scale_label": scale_conf["label"],
-                        "scales": _scale_options(),
-                        "app_version": _app_version(),
-                        "generated_at": datetime.now(timezone.utc),
-                    },
-                    "clan": {"tag": DEFAULT_CLAN_TAG, "name": "Aucune donnée", "members": 0},
-                    "kpis": {},
-                    "wars": {
-                        "overall": _war_summary_row({}),
-                        "gdc": _war_summary_row({}),
-                        "ldc": _war_summary_row({}),
-                    },
-                    "health": {"score": 0.0, "grade": "D", "components": {}},
-                    "players": [],
-                    "at_risk": [],
-                    "top_contributors": [],
-                    "capital": {
-                        "latest": {},
-                        "top_members": [],
-                        "used_attacks": 0,
-                        "capacity_attacks": 0,
-                        "history": [],
-                        "summary": {},
-                    },
-                    "freshness": {},
-                    "charts": {
-                        "clan_points": [],
-                        "war_outcomes": {"gdc": [], "ldc": [], "overall": []},
-                        "health_components": [],
-                        "clan_games": [],
-                        "capital_weekends": [],
-                    },
-                }
+                return _empty_overview_payload(scale_key, scale_conf)
 
             clan_tag = str(clan["tag"])
 
@@ -1131,13 +997,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
     ]
 
     return {
-        "meta": {
-            "scale": scale_key,
-            "scale_label": scale_conf["label"],
-            "scales": _scale_options(),
-            "app_version": _app_version(),
-            "generated_at": datetime.now(timezone.utc),
-        },
+        "meta": _meta_payload(scale_key, scale_conf),
         "clan": clan,
         "kpis": {
             "active_members": _safe_int(members_agg.get("active_members")),
@@ -1672,13 +1532,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
     ]
 
     return {
-        "meta": {
-            "scale": scale_key,
-            "scale_label": scale_conf["label"],
-            "scales": _scale_options(),
-            "app_version": _app_version(),
-            "generated_at": datetime.now(timezone.utc),
-        },
+        "meta": _meta_payload(scale_key, scale_conf),
         "player": player,
         "summary": {
             **summary,
