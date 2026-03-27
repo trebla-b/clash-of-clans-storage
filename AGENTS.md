@@ -4,6 +4,7 @@
 - Toujours committer les modifications réalisées.
 - Faire des commits intermédiaires réguliers pendant le travail, dès qu'une étape est stable et vérifiable.
 - Préférer plusieurs petits commits cohérents plutôt qu'un gros commit final.
+- Après chaque grosse modification stable, penser à redéployer les services concernés pour que le site reflète bien le code livré.
 - Toujours pousser (`git push`) juste après le commit.
 
 ## Versioning
