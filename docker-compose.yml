@@ -60,5 +60,26 @@ services:
     environment:
       TZ: Europe/Paris
 
+  db-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Paris
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: coc
+      POSTGRES_USER: coc
+      PGPASSWORD: coc
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${DB_BACKUP_INTERVAL_SECONDS:-21600}
+      BACKUP_RETENTION_COUNT: ${DB_BACKUP_RETENTION_COUNT:-28}
+    volumes:
+      - ./backups:/backups
+      - ./docker/db-backup.sh:/db-backup.sh:ro
+    entrypoint: ["/bin/sh", "/db-backup.sh"]
+
 volumes:
   db_data:

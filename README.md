@@ -5,10 +5,14 @@ Stack Docker:
 - `cron`: fetch API Clash of Clans + stockage DB (horaire)
 - `dashboard-api`: API Python (lit la DB, calcule les stats)
 - `dashboard`: front **React Native Web** (design liquid) sur `http://localhost:8120`
+- `db-backup`: dump PostgreSQL compressé et rotatif dans `./backups`
 
 ## Configuration
 
 1. Copier `.env.example` vers `.env` puis renseigner `API_KEY`.
+   Variables backup disponibles:
+   - `DB_BACKUP_INTERVAL_SECONDS` (par défaut `21600`, soit toutes les 6h)
+   - `DB_BACKUP_RETENTION_COUNT` (par défaut `28` dumps conservés)
 2. Renseigner `config/config.yml`:
    - `clan_id` obligatoire (pas de valeur par défaut)
    - `fetch_cron` (par défaut: `0 * * * *`)
@@ -44,6 +48,22 @@ docker compose up --build -d
 docker compose logs -f cron
 docker compose logs -f dashboard-api
 docker compose logs -f dashboard
+docker compose logs -f db-backup
+```
+
+## Sauvegardes DB
+
+- Les backups PostgreSQL sont écrits automatiquement dans `./backups`.
+- Un dump compressé est créé au démarrage du service puis à intervalle régulier.
+- La rotation supprime automatiquement les dumps les plus anciens au-delà de la rétention configurée.
+- Les backups sont stockés hors du volume Docker PostgreSQL, donc `docker compose down -v` n'efface pas `./backups`.
+
+### Restaurer un backup
+
+Exemple avec le dump le plus récent:
+
+```bash
+gunzip -c backups/coc_YYYYMMDDTHHMMSSZ.sql.gz | docker compose exec -T db psql -U coc -d coc
 ```
 
 ## Règles métier importantes
@@ -84,3 +104,5 @@ Si la base existait déjà et que tu veux repartir proprement:
 docker compose down -v
 docker compose up --build -d
 ```
+
+Les dumps présents dans `./backups` restent disponibles pour restaurer l'historique après recréation de la base.
