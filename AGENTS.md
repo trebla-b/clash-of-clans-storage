@@ -2,6 +2,8 @@
 
 ## Git workflow
 - Toujours committer les modifications réalisées.
+- Faire des commits intermédiaires réguliers pendant le travail, dès qu'une étape est stable et vérifiable.
+- Préférer plusieurs petits commits cohérents plutôt qu'un gros commit final.
 - Toujours pousser (`git push`) juste après le commit.
 
 ## Versioning
