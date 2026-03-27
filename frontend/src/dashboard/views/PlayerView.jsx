@@ -35,7 +35,7 @@ export default function PlayerView({ data, scale, onScaleChange, onBack }) {
   const warTimeline = useMemo(() => buildPlayerWarTimeline(data?.histories?.wars || [], family), [data?.histories?.wars, family]);
 
   const snapshotChart = useMemo(() => buildPlayerSnapshotChart(snapshotSeries), [snapshotSeries]);
-  const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries, capitalSeries), [snapshotSeries, capitalSeries]);
+  const deltaChart = useMemo(() => buildPlayerDeltaChart(snapshotSeries), [snapshotSeries]);
   const capitalChart = useMemo(() => buildPlayerCapitalChart(capitalSeries), [capitalSeries]);
   const clanGamesMonthlyChart = useMemo(
     () => buildPlayerClanGamesMonthlyChart(clanGamesMonthlySeries),
@@ -105,7 +105,7 @@ export default function PlayerView({ data, scale, onScaleChange, onBack }) {
             <Line data={snapshotChart} options={chartOptions()} />
           </View>
         </Panel>
-        <Panel title="Progression" subtitle="dons (delta) + loot capitale par weekend">
+        <Panel title="Progression" subtitle="dons (delta) entre snapshots">
           <View style={styles.chartWrap}>
             <Bar data={deltaChart} options={chartOptions({ stacked: true })} />
           </View>

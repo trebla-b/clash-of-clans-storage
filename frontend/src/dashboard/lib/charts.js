@@ -131,8 +131,7 @@ export function buildPlayerSnapshotChart(series) {
   };
 }
 
-export function buildPlayerDeltaChart(series, capitalSeries) {
-  const raidLootByLabel = new Map((capitalSeries || []).map((item) => [item.label, Number(item?.loot || 0)]));
+export function buildPlayerDeltaChart(series) {
   return {
     labels: series.map((item) => item.label),
     datasets: [
@@ -140,11 +139,6 @@ export function buildPlayerDeltaChart(series, capitalSeries) {
         label: "Dons",
         data: series.map((item) => item.donations_delta),
         backgroundColor: "rgba(85, 230, 169, 0.84)",
-      },
-      {
-        label: "Raid loot weekend",
-        data: series.map((item) => raidLootByLabel.get(item.label) || 0),
-        backgroundColor: "rgba(77, 215, 248, 0.84)",
       },
     ],
   };
