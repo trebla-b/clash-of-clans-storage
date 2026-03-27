@@ -214,6 +214,20 @@ def _compute_delta(current: int | float, previous: int | float | None) -> float:
     return round(float(current) - float(previous), 1)
 
 
+def _compute_monthly_progress(
+    current_total: int | float | None,
+    *,
+    previous_total: int | float | None = None,
+    month_floor_total: int | float | None = None,
+) -> int:
+    current = _safe_int(current_total)
+    if previous_total is not None:
+        return max(current - _safe_int(previous_total), 0)
+    if month_floor_total is not None:
+        return max(current - _safe_int(month_floor_total), 0)
+    return 0
+
+
 def _serialize_json(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -379,7 +393,8 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     SELECT
                         player_tag,
                         date_trunc('month', fetched_at) AS month_bucket,
-                        MAX(clan_games_points_total)::BIGINT AS month_total
+                        MAX(clan_games_points_total)::BIGINT AS month_total,
+                        MIN(clan_games_points_total)::BIGINT AS month_floor_total
                     FROM player_snapshots
                     WHERE clan_tag = %s
                       {clan_games_time_clause}
@@ -388,17 +403,15 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 monthly_clan AS (
                     SELECT
                         month_bucket,
-                        COALESCE(SUM(month_total), 0)::BIGINT AS clan_total
+                        COALESCE(SUM(month_total), 0)::BIGINT AS clan_total,
+                        COALESCE(SUM(month_floor_total), 0)::BIGINT AS clan_floor_total
                     FROM monthly_player
                     GROUP BY 1
                 )
                 SELECT
                     month_bucket,
                     clan_total,
-                    GREATEST(
-                        clan_total - COALESCE(LAG(clan_total) OVER (ORDER BY month_bucket), clan_total),
-                        0
-                    )::BIGINT AS monthly_delta
+                    clan_floor_total
                 FROM monthly_clan
                 ORDER BY month_bucket
                 """,
@@ -406,7 +419,14 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             )
 
             clan_games_monthly = []
+            previous_clan_games_total: int | None = None
             for row in clan_games_monthly_raw:
+                row["monthly_delta"] = _compute_monthly_progress(
+                    row.get("clan_total"),
+                    previous_total=previous_clan_games_total,
+                    month_floor_total=row.get("clan_floor_total"),
+                )
+                previous_clan_games_total = _safe_int(row.get("clan_total"))
                 month_bucket = row.get("month_bucket")
                 if display_month_floor is not None and isinstance(month_bucket, datetime) and month_bucket < display_month_floor:
                     continue
@@ -712,7 +732,8 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     SELECT
                         player_tag,
                         date_trunc('month', fetched_at) AS month_bucket,
-                        MAX(clan_games_points_total)::INT AS month_total
+                        MAX(clan_games_points_total)::INT AS month_total,
+                        MIN(clan_games_points_total)::INT AS month_floor_total
                     FROM player_snapshots
                     WHERE clan_tag = %s
                       AND fetched_at >= date_trunc('month', NOW()) - INTERVAL '1 month'
@@ -721,6 +742,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 SELECT
                     player_tag,
                     MAX(month_total) FILTER (WHERE month_bucket = date_trunc('month', NOW()))::INT AS current_month_total,
+                    MAX(month_floor_total) FILTER (WHERE month_bucket = date_trunc('month', NOW()))::INT AS current_month_floor_total,
                     MAX(month_total) FILTER (
                         WHERE month_bucket = date_trunc('month', NOW()) - INTERVAL '1 month'
                     )::INT AS previous_month_total
@@ -734,10 +756,11 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 player_tag = row.get("player_tag")
                 if not player_tag:
                     continue
-                current_total = _safe_int(row.get("current_month_total"), 0)
-                previous_total_raw = row.get("previous_month_total")
-                previous_total = _safe_int(previous_total_raw, current_total) if previous_total_raw is not None else current_total
-                clan_games_delta_by_player[str(player_tag)] = max(current_total - previous_total, 0)
+                clan_games_delta_by_player[str(player_tag)] = _compute_monthly_progress(
+                    row.get("current_month_total"),
+                    previous_total=row.get("previous_month_total"),
+                    month_floor_total=row.get("current_month_floor_total"),
+                )
 
             snapshot_activity_rows = _all(
                 cur,
@@ -1266,7 +1289,8 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 WITH monthly AS (
                     SELECT
                         date_trunc('month', fetched_at) AS month_bucket,
-                        MAX(clan_games_points_total)::BIGINT AS month_total
+                        MAX(clan_games_points_total)::BIGINT AS month_total,
+                        MIN(clan_games_points_total)::BIGINT AS month_floor_total
                     FROM player_snapshots
                     WHERE player_tag = %s
                       {player_clan_games_time_clause}
@@ -1275,10 +1299,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 SELECT
                     month_bucket,
                     month_total,
-                    GREATEST(
-                        month_total - COALESCE(LAG(month_total) OVER (ORDER BY month_bucket), month_total),
-                        0
-                    )::BIGINT AS monthly_delta
+                    month_floor_total
                 FROM monthly
                 ORDER BY month_bucket
                 """,
@@ -1286,7 +1307,14 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
             )
 
             player_clan_games_monthly = []
+            previous_player_clan_games_total: int | None = None
             for row in player_clan_games_monthly_raw:
+                row["monthly_delta"] = _compute_monthly_progress(
+                    row.get("month_total"),
+                    previous_total=previous_player_clan_games_total,
+                    month_floor_total=row.get("month_floor_total"),
+                )
+                previous_player_clan_games_total = _safe_int(row.get("month_total"))
                 month_bucket = row.get("month_bucket")
                 if (
                     player_display_month_floor is not None
