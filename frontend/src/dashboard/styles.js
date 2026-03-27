@@ -263,6 +263,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(114, 150, 174, 0.12)",
     borderColor: "rgba(140, 182, 205, 0.28)",
   },
+  warChipOutcome: {
+    minWidth: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   warChipStatusSuccess: {
     backgroundColor: "rgba(85, 230, 169, 0.14)",
     borderColor: "rgba(121, 243, 191, 0.34)",

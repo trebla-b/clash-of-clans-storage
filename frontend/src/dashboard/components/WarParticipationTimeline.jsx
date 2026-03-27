@@ -43,6 +43,19 @@ export default function WarParticipationTimeline({ wars }) {
             war.statusTone === "info" && styles.warChipTextInfo,
             war.statusTone === "neutral" && styles.warChipTextNeutral,
           ];
+          const outcomeStyle = [
+            styles.warChip,
+            styles.warChipOutcome,
+            war.outcomeTone === "success" && styles.warChipStatusSuccess,
+            war.outcomeTone === "warning" && styles.warChipStatusWarning,
+            war.outcomeTone === "danger" && styles.warChipStatusDanger,
+          ];
+          const outcomeTextStyle = [
+            styles.warChipText,
+            war.outcomeTone === "success" && styles.warChipTextSuccess,
+            war.outcomeTone === "warning" && styles.warChipTextWarning,
+            war.outcomeTone === "danger" && styles.warChipTextDanger,
+          ];
 
           return (
             <View key={war.key} style={styles.warCard}>
@@ -55,6 +68,11 @@ export default function WarParticipationTimeline({ wars }) {
                   <View style={statusStyle}>
                     <Text style={statusTextStyle}>{war.statusLabel}</Text>
                   </View>
+                  {war.outcomeCode ? (
+                    <View style={outcomeStyle}>
+                      <Text style={outcomeTextStyle}>{war.outcomeCode}</Text>
+                    </View>
+                  ) : null}
                 </View>
               </View>
 
@@ -81,7 +99,7 @@ export default function WarParticipationTimeline({ wars }) {
 
               <View style={styles.warCardMetaRow}>
                 <Text style={styles.warCardMetaSecondary}>{war.stateLabel}</Text>
-                <Text style={styles.warCardStars}>{fmtInt(war.stars)}★</Text>
+                <Text style={styles.warCardStars}>{war.starsLabel || `${fmtInt(war.stars)}★`}</Text>
               </View>
             </View>
           );

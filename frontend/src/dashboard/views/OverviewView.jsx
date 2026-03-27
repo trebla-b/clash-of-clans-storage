@@ -3,11 +3,10 @@ import { Pressable, Text, View } from "react-native";
 import { Bar, Line, Radar } from "react-chartjs-2";
 
 import CapitalSection from "./CapitalSection";
-import WarParticipationTimeline from "../components/WarParticipationTimeline";
-import { buildClanGamesChart, buildClanPointsChart, buildHealthChart, buildWarOutcomesChart, chartOptions } from "../lib/charts";
-import { PLAYER_SORT_DEFAULT, PLAYER_SORTS, WAR_FAMILY_LABEL } from "../lib/constants";
+import ClanWarSection from "./ClanWarSection";
+import { buildClanGamesChart, buildClanPointsChart, buildHealthChart, chartOptions } from "../lib/charts";
+import { PLAYER_SORT_DEFAULT, PLAYER_SORTS } from "../lib/constants";
 import { fmtDate, fmtDateOnly, fmtInt, fmtPct } from "../lib/formatters";
-import { buildWarParticipationTimeline } from "../lib/war";
 import { Metric, Panel, ScaleBar } from "../components/common";
 import styles from "../styles";
 
@@ -29,22 +28,15 @@ function sortPlayers(players, playerSort) {
 export default function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
   const clan = data?.clan || {};
   const kpis = data?.kpis || {};
-  const wars = data?.wars || {};
   const health = data?.health || {};
   const charts = data?.charts || {};
   const players = data?.players || [];
   const [playerSort, setPlayerSort] = useState(PLAYER_SORT_DEFAULT);
-  const [warFamily, setWarFamily] = useState("overall");
 
   const pointsChart = useMemo(() => buildClanPointsChart(charts.clan_points || []), [charts.clan_points]);
-  const warChart = useMemo(() => buildWarOutcomesChart(charts.war_outcomes || {}), [charts.war_outcomes]);
   const healthChart = useMemo(() => buildHealthChart(charts.health_components || []), [charts.health_components]);
   const clanGamesChart = useMemo(() => buildClanGamesChart(charts.clan_games || []), [charts.clan_games]);
   const sortedPlayers = useMemo(() => sortPlayers(players, playerSort), [players, playerSort]);
-  const warTimeline = useMemo(
-    () => buildWarParticipationTimeline(data?.histories?.wars || [], warFamily),
-    [data?.histories?.wars, warFamily],
-  );
 
   const onSortPlayers = useCallback((key) => {
     setPlayerSort((current) => {
@@ -84,24 +76,11 @@ export default function OverviewView({ data, scale, onScaleChange, onOpenPlayer 
           hint={`mois précédent ${fmtInt(kpis.clan_games_previous_month_delta)}`}
         />
         <Metric label="Capitale (cumul)" value={fmtInt(kpis.capital_contributions)} hint="weekend raids (ven-lun)" />
-        <Metric label="Win rate global" value={fmtPct(wars?.overall?.win_rate)} hint={`${fmtInt(wars?.overall?.wins)}W / ${fmtInt(wars?.overall?.losses)}L`} />
-      </View>
-
-      <View style={styles.metricsGrid}>
         <Metric
-          label="GDC participation"
-          value={`${fmtInt(wars?.gdc?.attacks_used)}/${fmtInt(wars?.gdc?.attack_capacity)}`}
-          hint={`${fmtInt(wars?.gdc?.missed_attacks)} oubliées (finies)`}
-          danger={Number(wars?.gdc?.missed_attacks || 0) > 0}
+          label="Win rate global"
+          value={fmtPct(data?.wars?.overall?.win_rate)}
+          hint={`${fmtInt(data?.wars?.overall?.wins)}W / ${fmtInt(data?.wars?.overall?.losses)}L`}
         />
-        <Metric
-          label="LDC participation"
-          value={`${fmtInt(wars?.ldc?.attacks_used)}/${fmtInt(wars?.ldc?.attack_capacity)}`}
-          hint={`${fmtInt(wars?.ldc?.missed_attacks)} oubliées (finies)`}
-          danger={Number(wars?.ldc?.missed_attacks || 0) > 0}
-        />
-        <Metric label="GDC war ended" value={fmtInt(wars?.gdc?.wars_ended)} hint={`WR ${fmtPct(wars?.gdc?.win_rate)}`} />
-        <Metric label="LDC war ended" value={fmtInt(wars?.ldc?.wars_ended)} hint={`WR ${fmtPct(wars?.ldc?.win_rate)}`} />
       </View>
 
       <View style={styles.panelRow}>
@@ -117,36 +96,13 @@ export default function OverviewView({ data, scale, onScaleChange, onOpenPlayer 
         </Panel>
       </View>
 
-      <View style={styles.panelRow}>
-        <Panel title="Résultats guerres GDC vs LDC" subtitle="comparaison des issues" wide>
-          <View style={styles.chartWrap}>
-            <Bar data={warChart} options={chartOptions({ stacked: true })} />
-          </View>
-        </Panel>
-        <Panel title="Clan Games (delta mensuel)" subtitle="événement mensuel, comparaison mois par mois">
-          <View style={styles.chartWrap}>
-            <Bar data={clanGamesChart} options={chartOptions({ dualAxis: true })} />
-          </View>
-        </Panel>
-      </View>
-
-      <Panel title="Historique guerres clan" subtitle="timeline par guerre, plus récent à gauche · oublis comptés seulement si guerre terminée">
-        <View style={styles.scaleRow}>
-          {Object.keys(WAR_FAMILY_LABEL).map((key) => {
-            const active = warFamily === key;
-            return (
-              <Pressable
-                key={key}
-                onPress={() => setWarFamily(key)}
-                style={[styles.scaleChip, active && styles.scaleChipActive]}
-              >
-                <Text style={[styles.scaleChipText, active && styles.scaleChipTextActive]}>{WAR_FAMILY_LABEL[key]}</Text>
-              </Pressable>
-            );
-          })}
+      <Panel title="Clan Games (delta mensuel)" subtitle="événement mensuel, comparaison mois par mois">
+        <View style={styles.chartWrap}>
+          <Bar data={clanGamesChart} options={chartOptions({ dualAxis: true })} />
         </View>
-        <WarParticipationTimeline wars={warTimeline} />
       </Panel>
+
+      <ClanWarSection data={data} />
 
       <CapitalSection data={data} />
 

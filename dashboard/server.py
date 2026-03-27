@@ -441,6 +441,8 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     w.end_time,
                     w.opponent_name,
                     w.outcome,
+                    COALESCE(w.clan_stars, 0)::INT AS clan_stars,
+                    COALESCE(w.opponent_stars, 0)::INT AS opponent_stars,
                     COALESCE(
                         SUM(
                             CASE

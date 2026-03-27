@@ -67,6 +67,18 @@ export function buildWarParticipationTimeline(wars, family) {
       const participationRate = (used / capacity) * 100;
       const familyKey = getWarFamilyKey(war?.war_type);
       const status = getWarParticipationStatus({ state: war?.state, used, capacity });
+      const outcomeKey = String(war?.outcome || "").toLowerCase();
+      const outcomeMeta =
+        outcomeKey === "win"
+          ? { code: "V", tone: "success" }
+          : outcomeKey === "loss"
+            ? { code: "D", tone: "danger" }
+            : outcomeKey === "draw"
+              ? { code: "N", tone: "warning" }
+              : null;
+      const clanStars = war?.clan_stars;
+      const opponentStars = war?.opponent_stars;
+      const hasWarScore = clanStars !== undefined && clanStars !== null && opponentStars !== undefined && opponentStars !== null;
 
       return {
         key: war?.war_id || `${war?.start_time || ""}-${war?.opponent_name || ""}`,
@@ -86,6 +98,9 @@ export function buildWarParticipationTimeline(wars, family) {
         remainingPct: (remaining / capacity) * 100,
         capacityNote: formatWarCapacityNote({ ended, missed, remaining }),
         stars: Number(war?.total_attack_stars || 0),
+        starsLabel: hasWarScore ? `${fmtInt(clanStars)}★ vs ${fmtInt(opponentStars)}★` : `${fmtInt(war?.total_attack_stars)}★`,
+        outcomeCode: outcomeMeta?.code,
+        outcomeTone: outcomeMeta?.tone,
       };
     });
 }
