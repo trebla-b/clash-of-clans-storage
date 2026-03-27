@@ -128,9 +128,6 @@ function parseRoute() {
   if (parts[0] === "players" && parts[1]) {
     return { view: "player", tag: decodeURIComponent(parts[1]) };
   }
-  if (parts[0] === "raids") {
-    return { view: "capital" };
-  }
   return { view: "overview" };
 }
 
@@ -603,30 +600,6 @@ function ScaleBar({ scales, currentScale, onChange }) {
   );
 }
 
-function MainNav({ currentView, onOpenOverview, onOpenCapital }) {
-  const items = [
-    { key: "overview", label: "Clan", onPress: onOpenOverview },
-    { key: "capital", label: "Raids", onPress: onOpenCapital },
-  ];
-
-  return (
-    <View style={styles.mainNav}>
-      {items.map((item) => {
-        const active = currentView === item.key;
-        return (
-          <Pressable
-            key={item.key}
-            onPress={item.onPress}
-            style={[styles.mainNavChip, active && styles.mainNavChipActive]}
-          >
-            <Text style={[styles.mainNavChipText, active && styles.mainNavChipTextActive]}>{item.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 function LegendItem({ color, label }) {
   return (
     <View style={styles.legendItem}>
@@ -831,6 +804,8 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
         </Panel>
       </View>
 
+      <CapitalSection data={data} />
+
       <Panel title="Détail participation joueurs">
         {players.length === 0 ? (
           <Text style={styles.emptyText}>Aucun membre actif trouvé.</Text>
@@ -887,7 +862,7 @@ function OverviewView({ data, scale, onScaleChange, onOpenPlayer }) {
   );
 }
 
-function CapitalView({ data, scale, onScaleChange }) {
+function CapitalSection({ data }) {
   const clan = data?.clan || {};
   const capital = data?.capital || {};
   const summary = capital?.summary || {};
@@ -909,13 +884,13 @@ function CapitalView({ data, scale, onScaleChange }) {
 
   return (
     <>
-      <View style={styles.hero}>
-        <Text style={styles.heroEyebrow}>Tendance capitale sur plusieurs weekends</Text>
-        <Text style={styles.heroTitle}>Raids {clan.name || "Clan"}</Text>
-        <Text style={styles.heroSubtitle}>
-          {clan.tag || "-"} · vue cumulée weekend par weekend pour éviter l'effet remise à zéro du raid en cours
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionEyebrow}>Raids capitales</Text>
+        <Text style={styles.sectionTitle}>Vue cumulée weekend par weekend</Text>
+        <Text style={styles.sectionSubtitle}>
+          {clan.name || "Clan"} {clan.tag || "-"} · lecture séparée du raid en cours et des raids terminés pour suivre la
+          tendance sans effet remise à zéro
         </Text>
-        <ScaleBar scales={data?.meta?.scales} currentScale={scale} onChange={onScaleChange} />
       </View>
 
       <View style={styles.metricsGrid}>
@@ -1186,11 +1161,6 @@ export default function App() {
     setRoute({ view: "overview" });
   }, []);
 
-  const navigateCapital = useCallback(() => {
-    window.history.pushState({}, "", "/raids");
-    setRoute({ view: "capital" });
-  }, []);
-
   const navigatePlayer = useCallback((tag) => {
     const slug = String(tag || "").replace(/^#/, "");
     window.history.pushState({}, "", `/players/${encodeURIComponent(slug)}`);
@@ -1250,8 +1220,6 @@ export default function App() {
 
       <ScrollView contentContainerStyle={styles.page}>
         <View style={styles.shell}>
-          <MainNav currentView={route.view} onOpenOverview={navigateOverview} onOpenCapital={navigateCapital} />
-
           {loading ? (
             <View style={styles.stateBox}>
               <ActivityIndicator size="large" color="#6ee9f8" />
@@ -1275,14 +1243,6 @@ export default function App() {
               scale={scale}
               onScaleChange={setScale}
               onOpenPlayer={navigatePlayer}
-            />
-          ) : null}
-
-          {!loading && !error && route.view === "capital" && overviewData ? (
-            <CapitalView
-              data={overviewData}
-              scale={scale}
-              onScaleChange={setScale}
             />
           ) : null}
 
@@ -1347,32 +1307,6 @@ const styles = StyleSheet.create({
     marginHorizontal: "auto",
     gap: 16,
   },
-  mainNav: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    alignSelf: "flex-start",
-  },
-  mainNavChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(147, 224, 247, 0.22)",
-    backgroundColor: "rgba(8, 21, 40, 0.7)",
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
-  mainNavChipActive: {
-    backgroundColor: "rgba(85, 230, 169, 0.16)",
-    borderColor: "rgba(121, 243, 191, 0.46)",
-  },
-  mainNavChipText: {
-    color: "#9cc8dc",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  mainNavChipTextActive: {
-    color: "#effbff",
-  },
   hero: {
     borderRadius: 24,
     borderWidth: 1,
@@ -1396,6 +1330,28 @@ const styles = StyleSheet.create({
   heroSubtitle: {
     color: "#b9dced",
     fontSize: 14,
+  },
+  sectionHeader: {
+    marginTop: 6,
+    paddingTop: 10,
+    gap: 6,
+  },
+  sectionEyebrow: {
+    color: "#8ed2eb",
+    textTransform: "uppercase",
+    letterSpacing: 1.2,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  sectionTitle: {
+    color: "#ecfbff",
+    fontSize: 24,
+    fontWeight: "800",
+  },
+  sectionSubtitle: {
+    color: "#9fcddd",
+    fontSize: 14,
+    maxWidth: 820,
   },
   heroActionRow: {
     gap: 12,
