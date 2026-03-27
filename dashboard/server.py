@@ -141,6 +141,9 @@ def _empty_overview_payload(scale_key: str, scale_conf: dict[str, Any]) -> dict[
             "history": [],
             "summary": {},
         },
+        "histories": {
+            "wars": [],
+        },
         "freshness": {},
         "charts": {
             "clan_points": [],
@@ -419,6 +422,73 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 ORDER BY 1, 2
                 """,
                 tuple(params_war),
+            )
+
+            params_war_history: list[Any] = [clan_tag]
+            time_clause_war_history = ""
+            if from_time is not None:
+                time_clause_war_history = "AND w.start_time >= %s"
+                params_war_history.append(from_time)
+
+            war_history_rows = _all(
+                cur,
+                f"""
+                SELECT
+                    w.war_id,
+                    COALESCE(NULLIF(w.war_type, ''), 'regular') AS war_type,
+                    w.state,
+                    w.start_time,
+                    w.end_time,
+                    w.opponent_name,
+                    w.outcome,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN wmp.is_our_clan = TRUE THEN COALESCE(wmp.attacks_used, 0)
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    )::INT AS attacks_used,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN wmp.is_our_clan = TRUE THEN
+                                    CASE
+                                        WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                        ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                    END
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    )::INT AS attack_capacity,
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN wmp.is_our_clan = TRUE AND w.state = 'warEnded' THEN
+                                    GREATEST(
+                                        CASE
+                                            WHEN COALESCE(NULLIF(w.war_type, ''), 'regular') = 'cwl' THEN 1
+                                            ELSE GREATEST(COALESCE(wmp.attack_capacity, 2), 1)
+                                        END - COALESCE(wmp.attacks_used, 0),
+                                        0
+                                    )
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    )::INT AS missed_attacks,
+                    COALESCE(MAX(w.clan_stars), 0)::INT AS total_attack_stars
+                FROM clan_wars w
+                LEFT JOIN war_member_performances wmp ON w.war_id = wmp.war_id
+                WHERE w.clan_tag = %s
+                  {time_clause_war_history}
+                GROUP BY w.war_id, w.war_type, w.state, w.start_time, w.end_time, w.opponent_name, w.outcome
+                ORDER BY w.start_time DESC
+                LIMIT 60
+                """,
+                tuple(params_war_history),
             )
 
             latest_capital = _one(
@@ -1036,6 +1106,9 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 "previous_completed_avg_participation": previous_completed_avg_participation,
                 "completed_weekends": len(completed_capital_weekends),
             },
+        },
+        "histories": {
+            "wars": war_history_rows,
         },
         "freshness": freshness,
         "charts": {

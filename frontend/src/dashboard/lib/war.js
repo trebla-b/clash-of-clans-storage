@@ -55,7 +55,7 @@ export function formatWarCapacityNote({ ended, missed, remaining }) {
   return `${fmtInt(remaining)} ${remaining > 1 ? "restantes" : "restante"}`;
 }
 
-export function buildPlayerWarTimeline(wars, family) {
+export function buildWarParticipationTimeline(wars, family) {
   return (wars || [])
     .filter((war) => family === "overall" || getWarFamilyKey(war?.war_type) === family)
     .map((war) => {
@@ -89,3 +89,5 @@ export function buildPlayerWarTimeline(wars, family) {
       };
     });
 }
+
+export const buildPlayerWarTimeline = buildWarParticipationTimeline;

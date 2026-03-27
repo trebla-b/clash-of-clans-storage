@@ -3,9 +3,11 @@ import { Pressable, Text, View } from "react-native";
 import { Bar, Line, Radar } from "react-chartjs-2";
 
 import CapitalSection from "./CapitalSection";
+import WarParticipationTimeline from "../components/WarParticipationTimeline";
 import { buildClanGamesChart, buildClanPointsChart, buildHealthChart, buildWarOutcomesChart, chartOptions } from "../lib/charts";
-import { PLAYER_SORT_DEFAULT, PLAYER_SORTS } from "../lib/constants";
+import { PLAYER_SORT_DEFAULT, PLAYER_SORTS, WAR_FAMILY_LABEL } from "../lib/constants";
 import { fmtDate, fmtDateOnly, fmtInt, fmtPct } from "../lib/formatters";
+import { buildWarParticipationTimeline } from "../lib/war";
 import { Metric, Panel, ScaleBar } from "../components/common";
 import styles from "../styles";
 
@@ -32,12 +34,17 @@ export default function OverviewView({ data, scale, onScaleChange, onOpenPlayer 
   const charts = data?.charts || {};
   const players = data?.players || [];
   const [playerSort, setPlayerSort] = useState(PLAYER_SORT_DEFAULT);
+  const [warFamily, setWarFamily] = useState("overall");
 
   const pointsChart = useMemo(() => buildClanPointsChart(charts.clan_points || []), [charts.clan_points]);
   const warChart = useMemo(() => buildWarOutcomesChart(charts.war_outcomes || {}), [charts.war_outcomes]);
   const healthChart = useMemo(() => buildHealthChart(charts.health_components || []), [charts.health_components]);
   const clanGamesChart = useMemo(() => buildClanGamesChart(charts.clan_games || []), [charts.clan_games]);
   const sortedPlayers = useMemo(() => sortPlayers(players, playerSort), [players, playerSort]);
+  const warTimeline = useMemo(
+    () => buildWarParticipationTimeline(data?.histories?.wars || [], warFamily),
+    [data?.histories?.wars, warFamily],
+  );
 
   const onSortPlayers = useCallback((key) => {
     setPlayerSort((current) => {
@@ -122,6 +129,24 @@ export default function OverviewView({ data, scale, onScaleChange, onOpenPlayer 
           </View>
         </Panel>
       </View>
+
+      <Panel title="Historique guerres clan" subtitle="timeline par guerre, plus récent à gauche · oublis comptés seulement si guerre terminée">
+        <View style={styles.scaleRow}>
+          {Object.keys(WAR_FAMILY_LABEL).map((key) => {
+            const active = warFamily === key;
+            return (
+              <Pressable
+                key={key}
+                onPress={() => setWarFamily(key)}
+                style={[styles.scaleChip, active && styles.scaleChipActive]}
+              >
+                <Text style={[styles.scaleChipText, active && styles.scaleChipTextActive]}>{WAR_FAMILY_LABEL[key]}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <WarParticipationTimeline wars={warTimeline} />
+      </Panel>
 
       <CapitalSection data={data} />
 
