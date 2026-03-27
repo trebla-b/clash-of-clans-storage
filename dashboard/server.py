@@ -208,6 +208,12 @@ def _compute_participation_rate(attacks_used: int, attack_capacity: int) -> floa
     return round((attacks_used / attack_capacity) * 100.0, 1)
 
 
+def _compute_delta(current: int | float, previous: int | float | None) -> float:
+    if previous is None:
+        return 0.0
+    return round(float(current) - float(previous), 1)
+
+
 def _serialize_json(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -297,13 +303,21 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     "players": [],
                     "at_risk": [],
                     "top_contributors": [],
-                    "capital": {"latest": {}, "top_members": [], "used_attacks": 0, "capacity_attacks": 0},
+                    "capital": {
+                        "latest": {},
+                        "top_members": [],
+                        "used_attacks": 0,
+                        "capacity_attacks": 0,
+                        "history": [],
+                        "summary": {},
+                    },
                     "freshness": {},
                     "charts": {
                         "clan_points": [],
                         "war_outcomes": {"gdc": [], "ldc": [], "overall": []},
                         "health_components": [],
                         "clan_games": [],
+                        "capital_weekends": [],
                     },
                 }
 
@@ -541,6 +555,47 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 (clan_tag,),
             )
 
+            capital_history_rows = _all(
+                cur,
+                f"""
+                WITH usage AS (
+                    SELECT
+                        clan_tag,
+                        season_start_time,
+                        COUNT(*)::INT AS roster_size,
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(attacks, 0) > 0 OR COALESCE(capital_resources_looted, 0) > 0
+                        )::INT AS active_raiders,
+                        COALESCE(SUM(attacks), 0)::INT AS used_attacks,
+                        COALESCE(SUM(attack_limit), 0)::INT + COALESCE(SUM(bonus_attack_limit), 0)::INT AS capacity_attacks
+                    FROM capital_raid_member_stats
+                    WHERE clan_tag = %s
+                    GROUP BY 1, 2
+                )
+                SELECT
+                    s.season_start_time,
+                    s.season_end_time,
+                    s.state,
+                    s.capital_total_loot,
+                    s.total_attacks,
+                    s.enemy_districts_destroyed,
+                    s.offensive_reward,
+                    s.defensive_reward,
+                    COALESCE(u.roster_size, 0)::INT AS roster_size,
+                    COALESCE(u.active_raiders, 0)::INT AS active_raiders,
+                    COALESCE(u.used_attacks, 0)::INT AS used_attacks,
+                    COALESCE(u.capacity_attacks, 0)::INT AS capacity_attacks
+                FROM capital_raid_seasons s
+                LEFT JOIN usage u
+                  ON u.clan_tag = s.clan_tag
+                 AND u.season_start_time = s.season_start_time
+                WHERE s.clan_tag = %s
+                  {"AND s.season_start_time >= %s" if from_time is not None else ""}
+                ORDER BY s.season_start_time DESC
+                """,
+                tuple([clan_tag, clan_tag] + ([from_time] if from_time is not None else [])),
+            )
+
             capital_top: list[dict[str, Any]] = []
             latest_capital_members_by_tag: dict[str, dict[str, Any]] = {}
             capital_capacity = 0
@@ -577,6 +632,78 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     _safe_int(row.get("attack_limit")) + _safe_int(row.get("bonus_attack_limit"))
                     for row in capital_members
                 )
+
+            now_utc = datetime.now(timezone.utc)
+            capital_history: list[dict[str, Any]] = []
+            for row in capital_history_rows:
+                used_attacks = _safe_int(row.get("used_attacks"), _safe_int(row.get("total_attacks")))
+                capacity_attacks = _safe_int(row.get("capacity_attacks"))
+                total_loot = _safe_int(row.get("capital_total_loot"))
+                season_end_time = row.get("season_end_time")
+                is_completed = isinstance(season_end_time, datetime) and season_end_time <= now_utc
+                capital_history.append(
+                    {
+                        **row,
+                        "used_attacks": used_attacks,
+                        "capacity_attacks": capacity_attacks,
+                        "participation_rate": _compute_participation_rate(used_attacks, capacity_attacks),
+                        "loot_per_attack": round((total_loot / used_attacks), 1) if used_attacks > 0 else 0.0,
+                        "is_completed": is_completed,
+                    }
+                )
+
+            capital_history_chrono = list(reversed(capital_history))
+            previous_capital_row: dict[str, Any] | None = None
+            for row in capital_history_chrono:
+                row["capital_total_loot_delta"] = _compute_delta(
+                    _safe_int(row.get("capital_total_loot")),
+                    _safe_int(previous_capital_row.get("capital_total_loot")) if previous_capital_row else None,
+                )
+                row["used_attacks_delta"] = _compute_delta(
+                    _safe_int(row.get("used_attacks")),
+                    _safe_int(previous_capital_row.get("used_attacks")) if previous_capital_row else None,
+                )
+                row["enemy_districts_destroyed_delta"] = _compute_delta(
+                    _safe_int(row.get("enemy_districts_destroyed")),
+                    _safe_int(previous_capital_row.get("enemy_districts_destroyed")) if previous_capital_row else None,
+                )
+                row["participation_rate_delta"] = _compute_delta(
+                    _safe_float(row.get("participation_rate")),
+                    _safe_float(previous_capital_row.get("participation_rate")) if previous_capital_row else None,
+                )
+                previous_capital_row = row
+
+            latest_completed_capital = next((row for row in capital_history if row.get("is_completed")), {})
+            best_capital_weekend = (
+                max(capital_history, key=lambda row: _safe_int(row.get("capital_total_loot"))) if capital_history else {}
+            )
+            completed_capital_weekends = [row for row in capital_history if row.get("is_completed")]
+            average_loot = round(
+                sum(_safe_int(row.get("capital_total_loot")) for row in completed_capital_weekends) / len(completed_capital_weekends),
+                1,
+            ) if completed_capital_weekends else 0.0
+            average_participation = round(
+                sum(_safe_float(row.get("participation_rate")) for row in completed_capital_weekends) / len(completed_capital_weekends),
+                1,
+            ) if completed_capital_weekends else 0.0
+            recent_completed = completed_capital_weekends[:3]
+            previous_completed = completed_capital_weekends[3:6]
+            recent_completed_avg_loot = round(
+                sum(_safe_int(row.get("capital_total_loot")) for row in recent_completed) / len(recent_completed),
+                1,
+            ) if recent_completed else 0.0
+            previous_completed_avg_loot = round(
+                sum(_safe_int(row.get("capital_total_loot")) for row in previous_completed) / len(previous_completed),
+                1,
+            ) if previous_completed else 0.0
+            recent_completed_avg_participation = round(
+                sum(_safe_float(row.get("participation_rate")) for row in recent_completed) / len(recent_completed),
+                1,
+            ) if recent_completed else 0.0
+            previous_completed_avg_participation = round(
+                sum(_safe_float(row.get("participation_rate")) for row in previous_completed) / len(previous_completed),
+                1,
+            ) if previous_completed else 0.0
 
             clan_games_player_monthly_rows = _all(
                 cur,
@@ -962,6 +1089,24 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
     clan_games_current_month_delta = _safe_int(clan_games_chart[-1].get("monthly_delta")) if clan_games_chart else 0
     clan_games_previous_month_delta = _safe_int(clan_games_chart[-2].get("monthly_delta")) if len(clan_games_chart) > 1 else 0
 
+    chart_capital_weekends = [
+        {
+            "label": row.get("season_start_time").astimezone().strftime("%d/%m")
+            if isinstance(row.get("season_start_time"), datetime)
+            else "-",
+            "bucket": row.get("season_start_time"),
+            "loot": _safe_int(row.get("capital_total_loot")),
+            "attacks": _safe_int(row.get("used_attacks")),
+            "capacity": _safe_int(row.get("capacity_attacks")),
+            "districts": _safe_int(row.get("enemy_districts_destroyed")),
+            "active_raiders": _safe_int(row.get("active_raiders")),
+            "participation_rate": _safe_float(row.get("participation_rate")),
+            "loot_per_attack": _safe_float(row.get("loot_per_attack")),
+            "is_completed": bool(row.get("is_completed")),
+        }
+        for row in capital_history_chrono
+    ]
+
     return {
         "meta": {
             "scale": scale_key,
@@ -996,6 +1141,18 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             "top_members": capital_top,
             "used_attacks": capital_used,
             "capacity_attacks": capital_capacity,
+            "history": capital_history,
+            "summary": {
+                "latest_completed": latest_completed_capital,
+                "best_weekend": best_capital_weekend,
+                "average_loot": average_loot,
+                "average_participation": average_participation,
+                "recent_completed_avg_loot": recent_completed_avg_loot,
+                "previous_completed_avg_loot": previous_completed_avg_loot,
+                "recent_completed_avg_participation": recent_completed_avg_participation,
+                "previous_completed_avg_participation": previous_completed_avg_participation,
+                "completed_weekends": len(completed_capital_weekends),
+            },
         },
         "freshness": freshness,
         "charts": {
@@ -1006,6 +1163,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 for key, value in health["components"].items()
             ],
             "clan_games": clan_games_chart,
+            "capital_weekends": chart_capital_weekends,
         },
     }
 
