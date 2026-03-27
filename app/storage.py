@@ -983,53 +983,58 @@ def upsert_capital_raid_seasons(conn: psycopg.Connection, clan_tag: str, payload
                 ),
             )
 
-            cur.execute(
-                """
-                DELETE FROM capital_raid_member_stats
-                WHERE clan_tag = %s
-                  AND season_start_time = %s
-                """,
-                (clan_tag, season_start_time),
-            )
-
-            for member in season.get("members") or []:
+            members = season.get("members")
+            should_refresh_member_stats = bool(members) or season.get("state") == "ongoing"
+            if should_refresh_member_stats:
+                # The API strips historical members once a raid has ended. Preserve previously captured
+                # per-player rows for ended weekends instead of wiping them on every later fetch.
                 cur.execute(
                     """
-                    INSERT INTO capital_raid_member_stats (
-                        clan_tag,
-                        season_start_time,
-                        player_tag,
-                        player_name,
-                        attacks,
-                        attack_limit,
-                        bonus_attack_limit,
-                        capital_resources_looted,
-                        raw_json,
-                        updated_at
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (clan_tag, season_start_time, player_tag)
-                    DO UPDATE SET
-                        player_name = EXCLUDED.player_name,
-                        attacks = EXCLUDED.attacks,
-                        attack_limit = EXCLUDED.attack_limit,
-                        bonus_attack_limit = EXCLUDED.bonus_attack_limit,
-                        capital_resources_looted = EXCLUDED.capital_resources_looted,
-                        raw_json = EXCLUDED.raw_json,
-                        updated_at = NOW()
+                    DELETE FROM capital_raid_member_stats
+                    WHERE clan_tag = %s
+                      AND season_start_time = %s
                     """,
-                    (
-                        clan_tag,
-                        season_start_time,
-                        member.get("tag"),
-                        member.get("name"),
-                        member.get("attacks"),
-                        member.get("attackLimit"),
-                        member.get("bonusAttackLimit"),
-                        member.get("capitalResourcesLooted"),
-                        Json(member),
-                    ),
+                    (clan_tag, season_start_time),
                 )
+
+                for member in members or []:
+                    cur.execute(
+                        """
+                        INSERT INTO capital_raid_member_stats (
+                            clan_tag,
+                            season_start_time,
+                            player_tag,
+                            player_name,
+                            attacks,
+                            attack_limit,
+                            bonus_attack_limit,
+                            capital_resources_looted,
+                            raw_json,
+                            updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (clan_tag, season_start_time, player_tag)
+                        DO UPDATE SET
+                            player_name = EXCLUDED.player_name,
+                            attacks = EXCLUDED.attacks,
+                            attack_limit = EXCLUDED.attack_limit,
+                            bonus_attack_limit = EXCLUDED.bonus_attack_limit,
+                            capital_resources_looted = EXCLUDED.capital_resources_looted,
+                            raw_json = EXCLUDED.raw_json,
+                            updated_at = NOW()
+                        """,
+                        (
+                            clan_tag,
+                            season_start_time,
+                            member.get("tag"),
+                            member.get("name"),
+                            member.get("attacks"),
+                            member.get("attackLimit"),
+                            member.get("bonusAttackLimit"),
+                            member.get("capitalResourcesLooted"),
+                            Json(member),
+                        ),
+                    )
 
             stored += 1
 

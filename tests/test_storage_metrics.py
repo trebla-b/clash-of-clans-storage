@@ -85,6 +85,30 @@ class StorageMetricsTests(unittest.TestCase):
         self.assertEqual(first_params[10], 4000)
         self.assertEqual(second_params[10], 0)
 
+    def test_capital_raid_member_stats_are_preserved_when_ended_payload_has_no_members(self):
+        conn = _DummyConn()
+        payload = {
+            "items": [
+                {
+                    "startTime": "20260320T070000.000Z",
+                    "endTime": "20260324T070000.000Z",
+                    "state": "ended",
+                    "capitalTotalLoot": 455235,
+                    "raidsCompleted": 8,
+                    "totalAttacks": 124,
+                    "enemyDistrictsDestroyed": 31,
+                    "offensiveReward": 192,
+                    "defensiveReward": 0,
+                    "members": [],
+                }
+            ]
+        }
+
+        storage.upsert_capital_raid_seasons(conn, "#CLAN", payload)
+
+        executed_sql = "\n".join(query for query, _params in conn.executed)
+        self.assertNotIn("DELETE FROM capital_raid_member_stats", executed_sql)
+
 
 if __name__ == "__main__":
     unittest.main()
