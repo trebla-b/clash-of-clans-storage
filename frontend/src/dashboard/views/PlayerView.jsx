@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Bar, Line } from "react-chartjs-2";
 
+import PlayerCapitalSection from "../components/PlayerCapitalSection";
 import WarParticipationTimeline from "../components/WarParticipationTimeline";
 import { Metric, Panel, ScaleBar } from "../components/common";
 import {
@@ -26,6 +27,7 @@ export default function PlayerView({ data, scale, onScaleChange, onBack }) {
   const player = data?.player || {};
   const summary = data?.summary || {};
   const charts = data?.charts || {};
+  const summaryCapital = summary?.capital || {};
 
   const snapshotSeries = charts?.snapshots || [];
   const capitalSeries = charts?.capital_history || [];
@@ -134,11 +136,7 @@ export default function PlayerView({ data, scale, onScaleChange, onBack }) {
         <WarParticipationTimeline wars={warTimeline} />
       </Panel>
 
-      <Panel title="Capitale" subtitle="loot et exécution par weekend (ven-lun)">
-        <View style={styles.chartWrap}>
-          <Bar data={capitalChart} options={chartOptions({ dualAxis: true })} />
-        </View>
-      </Panel>
+      <PlayerCapitalSection capitalHistory={data?.histories?.capital || []} capitalChart={capitalChart} summaryCapital={summaryCapital} />
 
       <Panel title="Historique guerre" subtitle="GDC/LDC différenciés">
         <View style={styles.tableWrap}>
