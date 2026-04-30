@@ -119,6 +119,41 @@ def _meta_payload(scale_key: str, scale_conf: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _month_key(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, datetime):
+        return None
+    local_value = value.astimezone()
+    return (local_value.year, local_value.month)
+
+
+def _summarize_player_clan_games_rows(
+    rows: list[dict[str, Any]],
+    *,
+    current_month_value: datetime | None = None,
+) -> tuple[dict[str, int], dict[str, int]]:
+    current_month_key = _month_key(current_month_value or datetime.now(timezone.utc))
+    previous_total_by_player: dict[str, int] = {}
+    current_delta_by_player: dict[str, int] = {}
+    recorded_total_by_player: dict[str, int] = {}
+
+    for row in rows:
+        player_tag = str(row.get("player_tag") or "")
+        if not player_tag:
+            continue
+
+        monthly_delta = _compute_monthly_progress(
+            row.get("month_total"),
+            previous_total=previous_total_by_player.get(player_tag),
+            month_floor_total=row.get("month_floor_total"),
+        )
+        recorded_total_by_player[player_tag] = recorded_total_by_player.get(player_tag, 0) + monthly_delta
+        if _month_key(row.get("month_bucket")) == current_month_key:
+            current_delta_by_player[player_tag] = monthly_delta
+        previous_total_by_player[player_tag] = _safe_int(row.get("month_total"))
+
+    return current_delta_by_player, recorded_total_by_player
+
+
 def _empty_overview_payload(scale_key: str, scale_conf: dict[str, Any]) -> dict[str, Any]:
     return {
         "meta": _meta_payload(scale_key, scale_conf),
@@ -663,42 +698,45 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 1,
             ) if previous_completed else 0.0
 
+            now_utc = datetime.now(timezone.utc)
+
             clan_games_player_monthly_rows = _all(
                 cur,
                 """
-                WITH monthly AS (
-                    SELECT
-                        player_tag,
-                        date_trunc('month', fetched_at) AS month_bucket,
-                        MAX(clan_games_points_total)::INT AS month_total,
-                        MIN(clan_games_points_total)::INT AS month_floor_total
-                    FROM player_snapshots
-                    WHERE clan_tag = %s
-                      AND fetched_at >= date_trunc('month', NOW()) - INTERVAL '1 month'
-                    GROUP BY 1, 2
-                )
                 SELECT
                     player_tag,
-                    MAX(month_total) FILTER (WHERE month_bucket = date_trunc('month', NOW()))::INT AS current_month_total,
-                    MAX(month_floor_total) FILTER (WHERE month_bucket = date_trunc('month', NOW()))::INT AS current_month_floor_total,
-                    MAX(month_total) FILTER (
-                        WHERE month_bucket = date_trunc('month', NOW()) - INTERVAL '1 month'
-                    )::INT AS previous_month_total
-                FROM monthly
+                    date_trunc('month', fetched_at) AS month_bucket,
+                    MAX(clan_games_points_total)::INT AS month_total,
+                    MIN(clan_games_points_total)::INT AS month_floor_total
+                FROM player_snapshots
+                WHERE clan_tag = %s
+                GROUP BY 1, 2
+                ORDER BY 1, 2
+                """,
+                (clan_tag,),
+            )
+            clan_games_delta_by_player, clan_games_recorded_total_by_player = _summarize_player_clan_games_rows(
+                clan_games_player_monthly_rows,
+                current_month_value=now_utc,
+            )
+
+            raid_loot_total_rows = _all(
+                cur,
+                """
+                SELECT
+                    player_tag,
+                    COALESCE(SUM(capital_resources_looted), 0)::BIGINT AS raid_loot_total
+                FROM capital_raid_member_stats
+                WHERE clan_tag = %s
                 GROUP BY player_tag
                 """,
                 (clan_tag,),
             )
-            clan_games_delta_by_player: dict[str, int] = {}
-            for row in clan_games_player_monthly_rows:
-                player_tag = row.get("player_tag")
-                if not player_tag:
-                    continue
-                clan_games_delta_by_player[str(player_tag)] = _compute_monthly_progress(
-                    row.get("current_month_total"),
-                    previous_total=row.get("previous_month_total"),
-                    month_floor_total=row.get("current_month_floor_total"),
-                )
+            raid_loot_total_by_player = {
+                str(row.get("player_tag")): _safe_int(row.get("raid_loot_total"))
+                for row in raid_loot_total_rows
+                if row.get("player_tag")
+            }
 
             snapshot_activity_rows = _all(
                 cur,
@@ -878,7 +916,6 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 tuple([clan_tag] + ([from_time] if from_time is not None else []) + [clan_tag, clan_tag]),
             )
 
-            now_utc = datetime.now(timezone.utc)
             for row in player_rows:
                 overall_capacity = _safe_int(row.get("attack_capacity"))
                 overall_used = _safe_int(row.get("attacks_used"))
@@ -898,7 +935,11 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                 if player_cap_entry:
                     player_raid_loot = _safe_int(player_cap_entry.get("capital_resources_looted"))
                 row["latest_raid_loot"] = player_raid_loot
+                row["raid_loot_total"] = max(raid_loot_total_by_player.get(player_tag, 0), player_raid_loot)
                 row["clan_games_monthly_delta"] = clan_games_delta_by_player.get(player_tag, 0)
+                raw_clan_games_total = _safe_int(row.get("clan_games_points_total"))
+                row["clan_games_points_total"] = raw_clan_games_total
+                row["clan_games_total"] = max(raw_clan_games_total, clan_games_recorded_total_by_player.get(player_tag, 0))
                 row["looted_resources_total"] = _safe_int(row.get("looted_resources_total"))
 
                 activity_row = snapshot_activity_by_tag.get(player_tag, {})
@@ -1258,6 +1299,10 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
                 ):
                     continue
                 player_clan_games_monthly.append(row)
+            player["clan_games_total"] = max(
+                _safe_int(player.get("clan_games_points_total")),
+                sum(_safe_int(row.get("monthly_delta")) for row in player_clan_games_monthly_raw),
+            )
 
             params_war: list[Any] = [tag, clan_tag]
             time_clause_war = ""
@@ -1542,6 +1587,7 @@ def _load_player_detail(player_tag: str, scale_key: str) -> dict[str, Any]:
         previous_capital_row = row
 
     latest_cap = capital_history[0] if capital_history else {}
+    player["raid_loot_total"] = sum(_safe_int(row.get("capital_resources_looted")) for row in capital_history)
     latest_completed_cap = next((row for row in capital_history if row.get("is_completed")), {})
     best_capital_weekend = (
         max(capital_history, key=lambda row: _safe_int(row.get("capital_resources_looted"))) if capital_history else {}

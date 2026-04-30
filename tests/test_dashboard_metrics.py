@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import sys
 import types
 import unittest
@@ -58,7 +59,7 @@ if "yaml" not in sys.modules:
     yaml_stub.safe_load = lambda value: {}
     sys.modules["yaml"] = yaml_stub
 
-from dashboard.server import _compute_monthly_progress
+from dashboard.server import _compute_monthly_progress, _summarize_player_clan_games_rows
 
 
 class DashboardMetricsTests(unittest.TestCase):
@@ -68,8 +69,41 @@ class DashboardMetricsTests(unittest.TestCase):
     def test_monthly_progress_falls_back_to_current_month_floor(self):
         self.assertEqual(_compute_monthly_progress(4000, previous_total=None, month_floor_total=1250), 2750)
 
+    def test_monthly_progress_uses_month_floor_when_counter_resets(self):
+        self.assertEqual(_compute_monthly_progress(1250, previous_total=4000, month_floor_total=200), 1050)
+
     def test_monthly_progress_never_goes_negative(self):
         self.assertEqual(_compute_monthly_progress(1250, previous_total=None, month_floor_total=4000), 0)
+
+    def test_player_clan_games_summary_returns_current_delta_and_recorded_total(self):
+        rows = [
+            {
+                "player_tag": "#P1",
+                "month_bucket": datetime(2026, 2, 1, tzinfo=timezone.utc),
+                "month_total": 2500,
+                "month_floor_total": 0,
+            },
+            {
+                "player_tag": "#P1",
+                "month_bucket": datetime(2026, 3, 1, tzinfo=timezone.utc),
+                "month_total": 4100,
+                "month_floor_total": 2600,
+            },
+            {
+                "player_tag": "#P2",
+                "month_bucket": datetime(2026, 3, 1, tzinfo=timezone.utc),
+                "month_total": 900,
+                "month_floor_total": 100,
+            },
+        ]
+
+        current_delta, recorded_total = _summarize_player_clan_games_rows(
+            rows,
+            current_month_value=datetime(2026, 3, 18, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(current_delta, {"#P1": 1600, "#P2": 800})
+        self.assertEqual(recorded_total, {"#P1": 4100, "#P2": 800})
 
 
 if __name__ == "__main__":

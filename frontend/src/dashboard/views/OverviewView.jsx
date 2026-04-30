@@ -141,8 +141,8 @@ export default function OverviewView({ data, scale, onScaleChange, onOpenPlayer 
                 <Text style={styles.tableCell}>{fmtInt(player.town_hall_level)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.donations)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.overall?.attack_stars)}</Text>
-                <Text style={styles.tableCell}>{fmtInt(player.latest_raid_loot)}</Text>
-                <Text style={styles.tableCell}>{fmtInt(player.clan_games_monthly_delta)}</Text>
+                <Text style={styles.tableCell}>{fmtInt(player.raid_loot_total)}</Text>
+                <Text style={styles.tableCell}>{fmtInt(player.clan_games_total)}</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.gdc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtInt(player.ldc?.missed_attacks)} miss</Text>
                 <Text style={styles.tableCell}>{fmtDate(player.estimated_last_activity_at)}</Text>

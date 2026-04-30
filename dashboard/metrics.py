@@ -143,7 +143,9 @@ def compute_monthly_progress(
 ) -> int:
     current = safe_int(current_total)
     if previous_total is not None:
-        return max(current - safe_int(previous_total), 0)
+        previous = safe_int(previous_total)
+        if current >= previous:
+            return current - previous
     if month_floor_total is not None:
         return max(current - safe_int(month_floor_total), 0)
     return 0

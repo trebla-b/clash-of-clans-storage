@@ -31,14 +31,14 @@ export const PLAYER_SORTS = {
     value: (player) => Number(player?.overall?.attack_stars || 0),
   },
   raid_loot: {
-    label: "Raid loot",
+    label: "Raid cum.",
     defaultDirection: "desc",
-    value: (player) => Number(player?.latest_raid_loot || 0),
+    value: (player) => Number(player?.raid_loot_total || 0),
   },
   jdc: {
-    label: "JDC",
+    label: "JDC cum.",
     defaultDirection: "desc",
-    value: (player) => Number(player?.clan_games_monthly_delta || 0),
+    value: (player) => Number(player?.clan_games_total || 0),
   },
   gdc_missed: {
     label: "GDC miss",
