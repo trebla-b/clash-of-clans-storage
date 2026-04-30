@@ -154,6 +154,12 @@ def _summarize_player_clan_games_rows(
     return current_delta_by_player, recorded_total_by_player
 
 
+def _capital_participation(active_raiders: Any, clan_members: Any, *, fallback_clan_members: Any = 0) -> tuple[int, int, float]:
+    participants = _safe_int(active_raiders)
+    members = max(_safe_int(clan_members), _safe_int(fallback_clan_members), participants)
+    return participants, members, _compute_participation_rate(participants, members)
+
+
 def _empty_overview_payload(scale_key: str, scale_conf: dict[str, Any]) -> dict[str, Any]:
     return {
         "meta": _meta_payload(scale_key, scale_conf),
@@ -577,11 +583,26 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
                     COALESCE(u.roster_size, 0)::INT AS roster_size,
                     COALESCE(u.active_raiders, 0)::INT AS active_raiders,
                     COALESCE(u.used_attacks, 0)::INT AS used_attacks,
-                    COALESCE(u.capacity_attacks, 0)::INT AS capacity_attacks
+                    COALESCE(u.capacity_attacks, 0)::INT AS capacity_attacks,
+                    COALESCE(cs.members, 0)::INT AS clan_members
                 FROM capital_raid_seasons s
                 LEFT JOIN usage u
                   ON u.clan_tag = s.clan_tag
                  AND u.season_start_time = s.season_start_time
+                LEFT JOIN LATERAL (
+                    SELECT members
+                    FROM clan_snapshots
+                    WHERE clan_tag = s.clan_tag
+                      AND fetched_at <= COALESCE(
+                          CASE
+                              WHEN s.state = 'ongoing' THEN NOW()
+                              ELSE s.season_end_time
+                          END,
+                          s.season_start_time + INTERVAL '4 days'
+                      )
+                    ORDER BY fetched_at DESC
+                    LIMIT 1
+                ) cs ON TRUE
                 WHERE s.clan_tag = %s
                   {"AND s.season_start_time >= %s" if from_time is not None else ""}
                 ORDER BY s.season_start_time DESC
@@ -631,15 +652,22 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             for row in capital_history_rows:
                 used_attacks = _safe_int(row.get("used_attacks"), _safe_int(row.get("total_attacks")))
                 capacity_attacks = _safe_int(row.get("capacity_attacks"))
+                active_raiders, clan_members, participation_rate = _capital_participation(
+                    row.get("active_raiders"),
+                    row.get("clan_members"),
+                    fallback_clan_members=clan.get("members"),
+                )
                 total_loot = _safe_int(row.get("capital_total_loot"))
                 season_end_time = row.get("season_end_time")
                 is_completed = isinstance(season_end_time, datetime) and season_end_time <= now_utc
                 capital_history.append(
                     {
                         **row,
+                        "active_raiders": active_raiders,
+                        "clan_members": clan_members,
                         "used_attacks": used_attacks,
                         "capacity_attacks": capacity_attacks,
-                        "participation_rate": _compute_participation_rate(used_attacks, capacity_attacks),
+                        "participation_rate": participation_rate,
                         "loot_per_attack": round((total_loot / used_attacks), 1) if used_attacks > 0 else 0.0,
                         "is_completed": is_completed,
                     }
@@ -1102,6 +1130,7 @@ def _load_overview(scale_key: str) -> dict[str, Any]:
             "capacity": _safe_int(row.get("capacity_attacks")),
             "districts": _safe_int(row.get("enemy_districts_destroyed")),
             "active_raiders": _safe_int(row.get("active_raiders")),
+            "clan_members": _safe_int(row.get("clan_members")),
             "participation_rate": _safe_float(row.get("participation_rate")),
             "loot_per_attack": _safe_float(row.get("loot_per_attack")),
             "is_completed": bool(row.get("is_completed")),

@@ -49,7 +49,7 @@ export default function CapitalSection({ data }) {
         <Metric
           label="Exécution dernier terminé"
           value={fmtPct(latestCompleted?.participation_rate)}
-          hint={`${fmtInt(latestCompleted?.used_attacks)}/${fmtInt(latestCompleted?.capacity_attacks)} attaques`}
+          hint={`${fmtInt(latestCompleted?.active_raiders)}/${fmtInt(latestCompleted?.clan_members)} joueurs`}
         />
         <Metric
           label="Meilleur weekend"
@@ -85,7 +85,7 @@ export default function CapitalSection({ data }) {
             <Bar data={capitalTrendChart} options={chartOptions({ dualAxis: true })} />
           </View>
         </Panel>
-        <Panel title="Exécution raids" subtitle="attaques jouées, capacité et participation">
+        <Panel title="Exécution raids" subtitle="joueurs participants, effectif clan et participation">
           <View style={styles.chartWrap}>
             <Bar data={capitalExecutionChart} options={chartOptions({ dualAxis: true, y1Max: 100, y1TickSuffix: "%" })} />
           </View>
@@ -103,6 +103,7 @@ export default function CapitalSection({ data }) {
                 <Text style={styles.tableCell}>Etat</Text>
                 <Text style={styles.tableCell}>Loot</Text>
                 <Text style={styles.tableCell}>Δ loot</Text>
+                <Text style={styles.tableCell}>Participants</Text>
                 <Text style={styles.tableCell}>Attaques</Text>
                 <Text style={styles.tableCell}>Exécution</Text>
                 <Text style={styles.tableCell}>Districts</Text>
@@ -116,6 +117,9 @@ export default function CapitalSection({ data }) {
                   <Text style={styles.tableCell}>{raid.is_completed ? "Terminé" : "En cours"}</Text>
                   <Text style={styles.tableCell}>{fmtInt(raid.capital_total_loot)}</Text>
                   <Text style={styles.tableCell}>{fmtSignedInt(raid.capital_total_loot_delta)}</Text>
+                  <Text style={styles.tableCell}>
+                    {fmtInt(raid.active_raiders)}/{fmtInt(raid.clan_members)}
+                  </Text>
                   <Text style={styles.tableCell}>
                     {fmtInt(raid.used_attacks)}/{fmtInt(raid.capacity_attacks)}
                   </Text>

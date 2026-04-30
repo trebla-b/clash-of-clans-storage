@@ -214,13 +214,13 @@ export function buildCapitalExecutionChart(series) {
     labels: series.map((item) => item.label),
     datasets: [
       {
-        label: "Attaques utilisées",
-        data: series.map((item) => item.attacks),
+        label: "Participants",
+        data: series.map((item) => item.active_raiders),
         backgroundColor: "rgba(85, 230, 169, 0.82)",
       },
       {
-        label: "Capacité",
-        data: series.map((item) => item.capacity),
+        label: "Effectif clan",
+        data: series.map((item) => item.clan_members),
         type: "line",
         borderColor: "#4dd7f8",
         tension: 0.25,

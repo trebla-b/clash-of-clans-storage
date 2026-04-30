@@ -59,7 +59,7 @@ if "yaml" not in sys.modules:
     yaml_stub.safe_load = lambda value: {}
     sys.modules["yaml"] = yaml_stub
 
-from dashboard.server import _compute_monthly_progress, _summarize_player_clan_games_rows
+from dashboard.server import _capital_participation, _compute_monthly_progress, _summarize_player_clan_games_rows
 
 
 class DashboardMetricsTests(unittest.TestCase):
@@ -104,6 +104,12 @@ class DashboardMetricsTests(unittest.TestCase):
 
         self.assertEqual(current_delta, {"#P1": 1600, "#P2": 800})
         self.assertEqual(recorded_total, {"#P1": 4100, "#P2": 800})
+
+    def test_capital_participation_uses_participants_over_clan_size(self):
+        self.assertEqual(_capital_participation(19, 38), (19, 38, 50.0))
+
+    def test_capital_participation_falls_back_to_current_clan_size(self):
+        self.assertEqual(_capital_participation(19, 0, fallback_clan_members=37), (19, 37, 51.4))
 
 
 if __name__ == "__main__":
