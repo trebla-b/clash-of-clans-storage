@@ -11,7 +11,7 @@ Stack Docker:
 
 1. Copier `.env.example` vers `.env` puis renseigner `API_KEY`.
    Port DB local disponible:
-   - `POSTGRES_HOST_PORT` (par défaut `5433`, pour libérer `5432`)
+   - `POSTGRES_HOST_PORT` (par défaut `5432`, à surcharger localement si besoin)
    Variables backup disponibles:
    - `DB_BACKUP_INTERVAL_SECONDS` (par défaut `21600`, soit toutes les 6h)
    - `DB_BACKUP_RETENTION_COUNT` (par défaut `28` dumps conservés)
@@ -39,7 +39,7 @@ docker compose up --build -d
 ## Accès
 
 - Dashboard (React Native Web): `http://localhost:8120`
-- PostgreSQL: `localhost:5433`
+- PostgreSQL: `localhost:5432`
 - API dashboard:
   - `http://localhost:8120/health` (proxy vers API)
   - `http://localhost:8120/api/overview?scale=30d`
